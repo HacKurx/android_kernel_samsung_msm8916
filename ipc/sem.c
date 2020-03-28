@@ -89,6 +89,7 @@
 
 #include <asm/uaccess.h>
 #include "util.h"
+#include <rsbac/hooks.h>
 
 /* One semaphore structure for each semaphore in the system. */
 struct sem {
@@ -494,6 +495,12 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 	int semflg = params->flg;
 	int i;
 
+#ifdef CONFIG_RSBAC_IPC_SEM
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!nsems)
 		return -EINVAL;
 	if (ns->used_sems + nsems > ns->sc_semmns)
@@ -508,6 +515,22 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 
 	sma->sem_perm.mode = (semflg & S_IRWXUGO);
 	sma->sem_perm.key = key;
+
+#ifdef CONFIG_RSBAC_IPC_SEM
+	rsbac_pr_debug(aef, "[sys_semget()]: calling ADF\n");
+	rsbac_target_id.ipc.type = I_sem;
+	rsbac_target_id.ipc.id.id_nr = 0;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_CREATE,
+				task_pid(current),
+				T_IPC,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		ipc_rcu_putref(sma, ipc_rcu_free);
+		return -EPERM;
+	}
+#endif
 
 	sma->sem_perm.security = NULL;
 	retval = security_sem_alloc(sma);
@@ -540,6 +563,21 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 	sem_unlock(sma, -1);
 	rcu_read_unlock();
 
+/* RSBAC: notify ADF of new shm */
+#ifdef CONFIG_RSBAC_IPC_SEM
+	rsbac_target_id.ipc.id.id_nr = sma->sem_perm.id;
+	rsbac_new_target_id.dummy = 0;
+	if (rsbac_adf_set_attr(R_CREATE,
+				task_pid(current),
+				T_IPC,
+				rsbac_target_id,
+				T_NONE,
+				rsbac_new_target_id,
+				A_none,
+				rsbac_attribute_value))
+		rsbac_printk(KERN_WARNING
+		"newary() [sys_semget()]: rsbac_adf_set_attr() returned error\n");
+#endif
 	return sma->sem_perm.id;
 }
 
@@ -1251,6 +1289,12 @@ static int semctl_setval(struct ipc_namespace *ns, int semid, int semnum,
 	int err;
 	struct list_head tasks;
 	int val;
+
+#ifdef CONFIG_RSBAC_IPC_SEM
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 #if defined(CONFIG_64BIT) && defined(__BIG_ENDIAN)
 	/* big-endian 64bit */
 	val = arg >> 32;
@@ -1288,6 +1332,22 @@ static int semctl_setval(struct ipc_namespace *ns, int semid, int semnum,
 		return -EACCES;
 	}
 
+#ifdef CONFIG_RSBAC_IPC_SEM
+	rsbac_target_id.ipc.type = I_sem;
+	rsbac_target_id.ipc.id.id_nr = semid;
+	rsbac_pr_debug(aef, "[sys_semctl()]: calling ADF\n");
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_WRITE,
+				task_pid(current),
+				T_IPC,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		rcu_read_unlock();
+		return -EPERM;
+	}
+#endif
+
 	sem_lock(sma, NULL, -1);
 
 	if (sma->sem_perm.deleted) {
@@ -1322,6 +1382,12 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 	ushort fast_sem_io[SEMMSL_FAST];
 	ushort* sem_io = fast_sem_io;
 	struct list_head tasks;
+
+#ifdef CONFIG_RSBAC_IPC_SEM
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
 
 	INIT_LIST_HEAD(&tasks);
 
@@ -1374,6 +1440,24 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 				goto out_unlock;
 			}
 		}
+#ifdef CONFIG_RSBAC_IPC_SEM
+		rsbac_target_id.ipc.type = I_sem;
+		rsbac_target_id.ipc.id.id_nr = semid;
+		rsbac_pr_debug(aef, "[sys_semctl()]: calling ADF\n");
+		rsbac_attribute_value.dummy = 0;
+		if (!rsbac_adf_request(R_READ,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			sem_unlock(sma, -1);
+			rcu_read_unlock();
+			err = -EPERM;
+			goto out_free;
+		}
+#endif
+
 		for (i = 0; i < sma->sem_nsems; i++)
 			sem_io[i] = sma->sem_base[i].semval;
 		sem_unlock(sma, -1);
@@ -1381,6 +1465,25 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 		err = 0;
 		if(copy_to_user(array, sem_io, nsems*sizeof(ushort)))
 			err = -EFAULT;
+
+		/* RSBAC: notify ADF of read sem */
+#ifdef CONFIG_RSBAC_IPC_SEM
+		if(!err) {
+			rsbac_new_target_id.dummy = 0;
+			if (rsbac_adf_set_attr(R_READ,
+						task_pid(current),
+						T_IPC,
+						rsbac_target_id,
+						T_NONE,
+						rsbac_new_target_id,
+						A_none,
+						rsbac_attribute_value)) {
+				rsbac_printk(KERN_WARNING
+						"semctl_main() [sys_semctl()]: rsbac_adf_set_attr() returned error");
+			}
+		}
+#endif
+
 		goto out_free;
 	}
 	case SETALL:
@@ -1408,6 +1511,23 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 			goto out_free;
 		}
 
+#ifdef CONFIG_RSBAC_IPC_SEM
+		rsbac_target_id.ipc.type = I_sem;
+		rsbac_target_id.ipc.id.id_nr = semid;
+		rsbac_pr_debug(aef, "[sys_semctl()]: calling ADF\n");
+		rsbac_attribute_value.dummy = 0;
+		if (!rsbac_adf_request(R_WRITE,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			err = -EPERM;
+			ipc_rcu_putref(sma, ipc_rcu_free);
+			goto out_free;
+		}
+#endif
+
 		for (i = 0; i < nsems; i++) {
 			if (sem_io[i] > SEMVMX) {
 				ipc_rcu_putref(sma, ipc_rcu_free);
@@ -1431,6 +1551,23 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 				un->semadj[i] = 0;
 		}
 		sma->sem_ctime = get_seconds();
+
+                /* RSBAC: notify ADF of written sem */
+#ifdef CONFIG_RSBAC_IPC_SEM
+		rsbac_new_target_id.dummy = 0;
+		if (rsbac_adf_set_attr(R_WRITE,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			rsbac_printk(KERN_WARNING
+					"semctl_main() [sys_semctl()]: rsbac_adf_set_attr() returned error");
+		}
+#endif
+
 		/* maybe some queued-up processes were waiting for this */
 		do_smart_update(sma, NULL, 0, 0, &tasks);
 		err = 0;
@@ -1514,6 +1651,12 @@ static int semctl_down(struct ipc_namespace *ns, int semid,
 	struct semid64_ds semid64;
 	struct kern_ipc_perm *ipcp;
 
+#ifdef CONFIG_RSBAC_IPC_SEM
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if(cmd == IPC_SET) {
 		if (copy_semid_from_user(&semid64, p, version))
 			return -EFAULT;
@@ -1537,11 +1680,88 @@ static int semctl_down(struct ipc_namespace *ns, int semid,
 
 	switch (cmd) {
 	case IPC_RMID:
+#ifdef CONFIG_RSBAC_IPC_SEM
+		rsbac_target_id.ipc.type = I_sem;
+		rsbac_target_id.ipc.id.id_nr = semid;
+		rsbac_pr_debug(aef, "[sys_semctl()]: calling ADF\n");
+		rsbac_attribute_value.dummy = 0;
+		if (!rsbac_adf_request(R_DELETE,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			err = -EPERM;
+			goto out_unlock1;
+		}
+#endif
+
 		sem_lock(sma, NULL, -1);
 		/* freeary unlocks the ipc object and rcu */
 		freeary(ns, ipcp);
+
+                /* RSBAC: notify ADF of deleted sem */
+#ifdef CONFIG_RSBAC_IPC_SEM
+		rsbac_new_target_id.dummy = 0;
+		if (rsbac_adf_set_attr(R_DELETE,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			rsbac_printk(KERN_WARNING
+					"semctl_down() [sys_semctl()]: rsbac_adf_set_attr() returned error");
+		}
+#endif
+
 		goto out_up;
 	case IPC_SET:
+#ifdef CONFIG_RSBAC_IPC_SEM
+		rsbac_target_id.ipc.type = I_sem;
+		rsbac_target_id.ipc.id.id_nr = semid;
+		if (__kuid_val(ipcp->uid) != semid64.sem_perm.uid) {
+			rsbac_pr_debug(aef, "calling ADF\n");
+			rsbac_attribute_value.owner = semid64.sem_perm.uid;
+			if (!rsbac_adf_request(R_CHANGE_OWNER,
+						task_pid(current),
+						T_IPC,
+						rsbac_target_id,
+						A_owner,
+						rsbac_attribute_value)) {
+				err = -EPERM;
+				goto out_unlock1;
+			}
+		}
+		if (__kgid_val(ipcp->gid) != semid64.sem_perm.gid) {
+			rsbac_pr_debug(aef, "calling ADF\n");
+			rsbac_attribute_value.group = semid64.sem_perm.gid;
+			if (!rsbac_adf_request(R_CHANGE_GROUP,
+						task_pid(current),
+						T_IPC,
+						rsbac_target_id,
+						A_group,
+						rsbac_attribute_value)) {
+				err = -EPERM;
+				goto out_unlock1;
+			}
+		}
+		if (ipcp->mode != ((ipcp->mode & ~S_IRWXUGO) | (S_IRWXUGO & semid64.sem_perm.mode))) {
+			rsbac_pr_debug(aef, "calling ADF\n");
+			rsbac_attribute_value.mode = (S_IRWXUGO & semid64.sem_perm.mode);
+			if (!rsbac_adf_request(R_ALTER,
+						task_pid(current),
+						T_IPC,
+						rsbac_target_id,
+						A_mode,
+						rsbac_attribute_value)) {
+				err = -EPERM;
+				goto out_unlock1;
+			}
+		}
+#endif
+
 		sem_lock(sma, NULL, -1);
 		err = ipc_update_perm(&semid64.sem_perm, ipcp);
 		if (err)

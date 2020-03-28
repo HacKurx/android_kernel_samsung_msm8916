@@ -6830,6 +6830,13 @@ T:	git git://linuxtv.org/anttip/media_tree.git
 S:	Maintained
 F:	drivers/media/dvb-frontends/rtl2832*
 
+RSBAC
+P:	Amon Ott
+M:	ao@rsbac.org
+L:	rsbac@rsbac.org
+W:	http://www.rsbac.org
+S:	Maintained
+
 RTL8180 WIRELESS DRIVER
 M:	"John W. Linville" <linville@tuxdriver.com>
 L:	linux-wireless@vger.kernel.org

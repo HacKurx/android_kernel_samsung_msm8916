@@ -121,6 +121,10 @@ struct sched_attr {
 	u64 sched_period;
 };
 
+#if defined(CONFIG_RSBAC_CAP_LOG_MISSING) || defined(CONFIG_RSBAC_JAIL_LOG_MISSING)
+#include <rsbac/log_cap.h>
+#endif
+
 struct exec_domain;
 struct futex_pi_state;
 struct robust_list_head;
@@ -133,7 +137,11 @@ struct blk_plug;
  * List of flags we want to share for kernel threads,
  * if only because they are not used by them anyway.
  */
+#ifdef CONFIG_RSBAC
+#define CLONE_KERNEL	(CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_KTHREAD)
+#else
 #define CLONE_KERNEL	(CLONE_FS | CLONE_FILES | CLONE_SIGHAND)
+#endif
 
 /*
  * These are the constant used to fake the fixed-point load-average
@@ -2348,6 +2356,13 @@ static inline void mmdrop(struct mm_struct * mm)
 
 /* mmput gets rid of the mappings and all user-space */
 extern int mmput(struct mm_struct *);
+#ifdef CONFIG_RSBAC
+/* mmput gets rid of the mappings and all user-space
+ * not sleeping version. feeling like we have something in common ;)
+ * michal.
+ * */
+extern void mmput_nosleep(struct mm_struct *);
+#endif
 /* Grab a reference to a task's mm, if it is not already going away */
 extern struct mm_struct *get_task_mm(struct task_struct *task);
 /*
@@ -2380,7 +2395,11 @@ extern int disallow_signal(int);
 extern int do_execve(const char *,
 		     const char __user * const __user *,
 		     const char __user * const __user *);
+#ifdef CONFIG_RSBAC
+extern long do_fork(unsigned long long, unsigned long, unsigned long, int __user *, int __user *);
+#else
 extern long do_fork(unsigned long, unsigned long, unsigned long, int __user *, int __user *);
+#endif
 struct task_struct *fork_idle(int);
 extern pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags);
 

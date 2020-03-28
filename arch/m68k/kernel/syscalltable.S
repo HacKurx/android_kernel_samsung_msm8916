@@ -370,3 +370,10 @@ ENTRY(sys_call_table)
 	.long sys_kcmp
 	.long sys_finit_module
 
+#ifdef CONFIG_RSBAC
+	/* we use 400, until sys_security gets defined here */
+	.rept 399-346
+		.long sys_ni_syscall
+	.endr
+	.long sys_rsbac
+#endif

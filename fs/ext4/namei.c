@@ -41,6 +41,9 @@
 #include "acl.h"
 
 #include <trace/events/ext4.h>
+
+#include <rsbac/hooks.h>
+
 /*
  * define how far ahead to read directories while searching them.
  */
@@ -2742,6 +2745,12 @@ static int ext4_unlink(struct inode *dir, struct dentry *dentry)
 
 	inode = dentry->d_inode;
 
+#ifdef CONFIG_RSBAC_SECDEL
+        if(inode->i_nlink == 1) {
+                rsbac_sec_del(dentry, TRUE);
+        }
+#endif
+
 	retval = -EIO;
 	if (le32_to_cpu(de->inode) != inode->i_ino)
 		goto end_unlink;
@@ -3041,6 +3050,22 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 		if (retval)
 			goto end_rename;
 	} else {
+
+#ifdef CONFIG_RSBAC_SECDEL
+		if(new_inode->i_nlink == 1) {
+			ext4_journal_stop(handle);
+			rsbac_sec_del(new_dentry, TRUE);
+			handle = ext4_journal_start(old_dir, EXT4_HT_DIR,
+				(2 * EXT4_DATA_TRANS_BLOCKS(old_dir->i_sb) +
+				 EXT4_INDEX_EXTRA_TRANS_BLOCKS + 2));
+			if (IS_ERR(handle))
+				return PTR_ERR(handle);
+
+			if (IS_DIRSYNC(old_dir) || IS_DIRSYNC(new_dir))
+				handle->h_sync = 1;
+		}
+#endif
+
 		BUFFER_TRACE(new_bh, "get write access");
 		retval = ext4_journal_get_write_access(handle, new_bh);
 		if (retval)

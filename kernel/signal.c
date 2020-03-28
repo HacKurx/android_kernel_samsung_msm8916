@@ -43,6 +43,8 @@
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
 
+#include <rsbac/hooks.h>
+
 /*
  * SLAB caches for signal bits.
  */
@@ -791,6 +793,11 @@ static int check_kill_permission(int sig, struct siginfo *info,
 	struct pid *sid;
 	int error;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!valid_signal(sig))
 		return -EINVAL;
 
@@ -816,6 +823,27 @@ static int check_kill_permission(int sig, struct siginfo *info,
 			return -EPERM;
 		}
 	}
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[group_send_sig_info(), sys_tgkill(),sys_tkill()]: calling ADF\n");
+	rsbac_target_id.process = get_task_pid(t, PIDTYPE_PID);
+	rsbac_attribute_value.signal = sig;
+	if ((!info || ((unsigned long)info != 1
+			&& (unsigned long)info != 2 && SI_FROMUSER(info)))
+			&& ((sig != SIGCONT) || (task_session(current) != task_session(t)))
+			&& !(t->flags & PF_EXITING)
+			&& !rsbac_adf_request(R_SEND_SIGNAL,
+				task_pid(current),
+				T_PROCESS,
+				rsbac_target_id,
+				A_signal,
+				rsbac_attribute_value)
+	  ) {
+		put_pid(rsbac_target_id.process);
+		return -EPERM;
+        }
+	put_pid(rsbac_target_id.process);
+#endif
 
 	return security_task_kill(t, info, sig, 0);
 }

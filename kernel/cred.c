@@ -234,7 +234,9 @@ error:
  */
 struct cred *prepare_creds(void)
 {
+#ifndef CONFIG_RSBAC
 	struct task_struct *task = current;
+#endif
 	const struct cred *old;
 	struct cred *new;
 
@@ -246,7 +248,11 @@ struct cred *prepare_creds(void)
 
 	kdebug("prepare_creds() alloc %p", new);
 
+#ifdef CONFIG_RSBAC
+	old = current_cred();
+#else
 	old = task->cred;
+#endif
 	memcpy(new, old, sizeof(struct cred));
 
 	atomic_set(&new->usage, 1);
@@ -562,7 +568,7 @@ void __init cred_init(void)
 {
 	/* allocate a slab in which we can store credentials */
 	cred_jar = kmem_cache_create("cred_jar", sizeof(struct cred),
-				     0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
+				     0, SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_DESTROY_BY_RCU, NULL);
 }
 
 /**

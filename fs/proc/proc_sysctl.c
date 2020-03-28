@@ -12,6 +12,9 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/kmemleak.h>
+
+#include <rsbac/hooks.h>
+
 #include "internal.h"
 
 static const struct dentry_operations proc_sys_dentry_operations;
@@ -385,10 +388,31 @@ static int sysctl_perm(struct ctl_table_header *head, struct ctl_table *table, i
 	struct ctl_table_root *root = head->root;
 	int mode;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (root->permissions)
 		mode = root->permissions(head, table);
 	else
 		mode = table->mode;
+
+#ifdef CONFIG_RSBAC
+	if (op & 002) { /* write access */
+		rsbac_target_id.scd = ST_sysctl;
+		rsbac_attribute_value.mode = mode;
+		rsbac_pr_debug(aef, "[sysctl() etc.]: calling ADF\n");
+		if (!rsbac_adf_request(R_MODIFY_SYSTEM_DATA,
+					task_pid(current),
+					T_SCD,
+					rsbac_target_id,
+					A_mode,
+					rsbac_attribute_value)) {
+			return -EPERM;
+		}
+	}
+#endif
 
 	return test_perm(mode, op);
 }

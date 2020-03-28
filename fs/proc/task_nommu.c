@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/seq_file.h>
 #include "internal.h"
+#include <rsbac/hooks.h>
 
 /*
  * Logic: we've got two memory sums for each process, "shared", and
@@ -271,9 +272,30 @@ static int maps_open(struct inode *inode, struct file *file,
 	struct proc_maps_private *priv;
 	int ret = -ENOMEM;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (priv) {
 		priv->pid = proc_pid(inode);
+
+#ifdef CONFIG_RSBAC
+		rsbac_pr_debug(aef, "calling ADF\n");
+		rsbac_target_id.process = priv->pid;
+		rsbac_attribute_value.dummy = 0;
+		if (!rsbac_adf_request(R_GET_STATUS_DATA,
+					task_pid(current),
+					T_PROCESS,
+					rsbac_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			kfree(priv);
+			return -EPERM;
+		}
+#endif
+
 		ret = seq_open(file, ops);
 		if (!ret) {
 			struct seq_file *m = file->private_data;

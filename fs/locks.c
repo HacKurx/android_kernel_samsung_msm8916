@@ -129,6 +129,8 @@
 
 #include <asm/uaccess.h>
 
+#include <rsbac/hooks.h>
+
 #define IS_POSIX(fl)	(fl->fl_flags & FL_POSIX)
 #define IS_FLOCK(fl)	(fl->fl_flags & FL_FLOCK)
 #define IS_LEASE(fl)	(fl->fl_flags & FL_LEASE)
@@ -1629,6 +1631,12 @@ SYSCALL_DEFINE2(flock, unsigned int, fd, unsigned int, cmd)
 	int can_sleep, unlock;
 	int error;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	error = -EBADF;
 	if (!f.file)
 		goto out;
@@ -1650,6 +1658,38 @@ SYSCALL_DEFINE2(flock, unsigned int, fd, unsigned int, cmd)
 	error = security_file_lock(f.file, lock->fl_type);
 	if (error)
 		goto out_free;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "calling ADF\n");
+	rsbac_target = T_FILE;
+        rsbac_target_id.file.device = f.file->f_dentry->d_sb->s_dev;
+        rsbac_target_id.file.inode  = f.file->f_dentry->d_inode->i_ino;
+        rsbac_target_id.file.dentry_p = f.file->f_dentry;
+	if (S_ISDIR(f.file->f_dentry->d_inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(f.file->f_dentry->d_inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(f.file->f_dentry->d_inode->i_mode))
+		rsbac_target = T_SYMLINK;
+        else if (S_ISSOCK(f.file->f_dentry->d_inode->i_mode)) {
+          if(f.file->f_dentry->d_sb->s_magic == SOCKFS_MAGIC) {
+            rsbac_target = T_IPC;
+            rsbac_target_id.ipc.type = I_anonunix;
+            rsbac_target_id.ipc.id.id_nr = f.file->f_dentry->d_inode->i_ino;
+          } else
+            rsbac_target = T_UNIXSOCK;
+        }
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_LOCK,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto out_free;
+	}
+#endif
 
 	if (f.file->f_op && f.file->f_op->flock)
 		error = f.file->f_op->flock(f.file,
@@ -1726,6 +1766,12 @@ int fcntl_getlk(struct file *filp, struct flock __user *l)
 	struct flock flock;
 	int error;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	error = -EFAULT;
 	if (copy_from_user(&flock, l, sizeof(flock)))
 		goto out;
@@ -1736,6 +1782,32 @@ int fcntl_getlk(struct file *filp, struct flock __user *l)
 	error = flock_to_posix_lock(filp, &file_lock, &flock);
 	if (error)
 		goto out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[sys_fcntl()]: calling ADF\n");
+	rsbac_target = T_FILE;
+	if (S_ISDIR(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_UNIXSOCK;
+	rsbac_target_id.file.device = filp->f_dentry->d_sb->s_dev;
+	rsbac_target_id.file.inode  = filp->f_dentry->d_inode->i_ino;
+	rsbac_target_id.file.dentry_p = filp->f_dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_GET_STATUS_DATA,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto out;
+	}
+#endif
 
 	error = vfs_test_lock(filp, &file_lock);
 	if (error)
@@ -1832,6 +1904,12 @@ int fcntl_setlk(unsigned int fd, struct file *filp, unsigned int cmd,
 	struct file *f;
 	int error;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (file_lock == NULL)
 		return -ENOLCK;
 
@@ -1859,6 +1937,38 @@ int fcntl_setlk(unsigned int fd, struct file *filp, unsigned int cmd,
 		file_lock->fl_flags |= FL_SLEEP;
 	}
 	
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[sys_fcntl()]: calling ADF\n");
+	rsbac_target = T_FILE;
+	rsbac_target_id.file.device = filp->f_dentry->d_sb->s_dev;
+	rsbac_target_id.file.inode  = inode->i_ino;
+	rsbac_target_id.file.dentry_p = filp->f_dentry;
+	if (S_ISDIR(inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(filp->f_dentry->d_inode->i_mode)) {
+		if(filp->f_dentry->d_sb->s_magic == SOCKFS_MAGIC) {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			rsbac_target_id.ipc.id.id_nr = filp->f_dentry->d_inode->i_ino;
+		} else
+			rsbac_target = T_UNIXSOCK;
+	}
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_LOCK,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto out;
+	}
+#endif
+
 	error = -EBADF;
 	switch (flock.l_type) {
 	case F_RDLCK:
@@ -1913,6 +2023,12 @@ int fcntl_getlk64(struct file *filp, struct flock64 __user *l)
 	struct flock64 flock;
 	int error;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	error = -EFAULT;
 	if (copy_from_user(&flock, l, sizeof(flock)))
 		goto out;
@@ -1923,6 +2039,32 @@ int fcntl_getlk64(struct file *filp, struct flock64 __user *l)
 	error = flock64_to_posix_lock(filp, &file_lock, &flock);
 	if (error)
 		goto out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[sys_fcntl()]: calling ADF\n");
+	rsbac_target = T_FILE;
+	if (S_ISDIR(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(filp->f_dentry->d_inode->i_mode))
+		rsbac_target = T_UNIXSOCK;
+	rsbac_target_id.file.device = filp->f_dentry->d_sb->s_dev;
+	rsbac_target_id.file.inode  = filp->f_dentry->d_inode->i_ino;
+	rsbac_target_id.file.dentry_p = filp->f_dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_GET_STATUS_DATA,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto out;
+	}
+#endif
 
 	error = vfs_test_lock(filp, &file_lock);
 	if (error)
@@ -1951,6 +2093,12 @@ int fcntl_setlk64(unsigned int fd, struct file *filp, unsigned int cmd,
 	struct inode *inode;
 	struct file *f;
 	int error;
+
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
 
 	if (file_lock == NULL)
 		return -ENOLCK;
@@ -1995,6 +2143,38 @@ int fcntl_setlk64(unsigned int fd, struct file *filp, unsigned int cmd,
 		error = -EINVAL;
 		goto out;
 	}
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[sys_fcntl()]: calling ADF\n");
+	rsbac_target = T_FILE;
+	rsbac_target_id.file.device = filp->f_dentry->d_sb->s_dev;
+	rsbac_target_id.file.inode  = inode->i_ino;
+	rsbac_target_id.file.dentry_p = filp->f_dentry;
+	if (S_ISDIR(inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(filp->f_dentry->d_inode->i_mode)) {
+		if(filp->f_dentry->d_sb->s_magic == SOCKFS_MAGIC) {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			rsbac_target_id.ipc.id.id_nr = filp->f_dentry->d_inode->i_ino;
+		} else
+			rsbac_target = T_UNIXSOCK;
+	}
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_LOCK,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto out;
+	}
+#endif
 
 	error = do_lock_file_wait(filp, cmd, file_lock);
 

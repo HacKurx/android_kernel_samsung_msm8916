@@ -38,6 +38,8 @@
 
 #define DEVPORT_MINOR	4
 
+#include <rsbac/hooks.h>
+
 static inline unsigned long size_inside_page(unsigned long start,
 					     unsigned long size)
 {
@@ -108,6 +110,11 @@ static ssize_t read_mem(struct file *file, char __user *buf,
 	ssize_t read, sz;
 	char *ptr;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t       rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!valid_phys_addr_range(p, count))
 		return -EFAULT;
 	read = 0;
@@ -148,6 +155,25 @@ static ssize_t read_mem(struct file *file, char __user *buf,
 			if (!ptr)
 				return -EFAULT;
 
+#ifdef CONFIG_RSBAC
+		rsbac_attribute_value.pagenr = p >> PAGE_SHIFT;
+		if (rsbac_is_videomem(rsbac_attribute_value.pagenr, count))
+			rsbac_target_id.scd = ST_videomem;
+		else
+			rsbac_target_id.scd = ST_kmem;
+		rsbac_pr_debug(aef, "calling ADF\n");
+		if (!rsbac_adf_request(R_GET_STATUS_DATA,
+					task_pid(current),
+					T_SCD,
+					rsbac_target_id,
+					A_pagenr,
+					rsbac_attribute_value)) {
+			rsbac_printk(KERN_INFO "read_mem(): RSBAC denied read access to kernel mem page %u, size %u\n",
+					rsbac_attribute_value.pagenr, count);
+			return -EPERM;
+		}
+#endif
+
 			remaining = copy_to_user(buf, ptr, sz);
 
 			unxlate_dev_mem_ptr(p, ptr);
@@ -174,6 +200,11 @@ static ssize_t write_mem(struct file *file, const char __user *buf,
 	unsigned long copied;
 	void *ptr;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t       rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!valid_phys_addr_range(p, count))
 		return -EFAULT;
 
@@ -199,6 +230,25 @@ static ssize_t write_mem(struct file *file, const char __user *buf,
 		allowed = page_is_allowed(p >> PAGE_SHIFT);
 		if (!allowed)
 			return -EPERM;
+
+#ifdef CONFIG_RSBAC
+		rsbac_attribute_value.pagenr = p >> PAGE_SHIFT;
+		if (rsbac_is_videomem(rsbac_attribute_value.pagenr, sz))
+			rsbac_target_id.scd = ST_videomem;
+		else
+			rsbac_target_id.scd = ST_kmem;
+		rsbac_pr_debug(aef, "calling ADF\n");
+		if (!rsbac_adf_request(R_MODIFY_SYSTEM_DATA,
+					task_pid(current),
+					T_SCD,
+					rsbac_target_id,
+					A_pagenr,
+					rsbac_attribute_value)) {
+			rsbac_printk(KERN_INFO "write_mem(): RSBAC denied write access to kernel mem page %u, size %u\n",
+					rsbac_attribute_value.pagenr, sz);
+			return -EPERM;
+		}
+#endif
 
 		/* Skip actual writing when a page is marked as restricted. */
 		if (allowed == 1) {
@@ -328,6 +378,11 @@ static int mmap_mem(struct file *file, struct vm_area_struct *vma)
 {
 	size_t size = vma->vm_end - vma->vm_start;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t       rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!valid_mmap_phys_addr_range(vma->vm_pgoff, size))
 		return -EINVAL;
 
@@ -340,6 +395,25 @@ static int mmap_mem(struct file *file, struct vm_area_struct *vma)
 	if (!phys_mem_access_prot_allowed(file, vma->vm_pgoff, size,
 						&vma->vm_page_prot))
 		return -EINVAL;
+
+#ifdef CONFIG_RSBAC
+	rsbac_attribute_value.pagenr = vma->vm_pgoff;
+	if (rsbac_is_videomem(rsbac_attribute_value.pagenr, size))
+		rsbac_target_id.scd = ST_videomem;
+	else
+		rsbac_target_id.scd = ST_kmem;
+	rsbac_pr_debug(aef, "calling ADF\n");
+	if (!rsbac_adf_request(R_MODIFY_SYSTEM_DATA,
+				task_pid(current),
+				T_SCD,
+				rsbac_target_id,
+				A_pagenr,
+				rsbac_attribute_value)) {
+		rsbac_printk(KERN_INFO "mmap_mem(): RSBAC denied mmap access to kernel mem page %u, size %u\n",
+				rsbac_attribute_value.pagenr, size);
+		return -EPERM;
+	}
+#endif
 
 	vma->vm_page_prot = phys_mem_access_prot(file, vma->vm_pgoff,
 						 size,

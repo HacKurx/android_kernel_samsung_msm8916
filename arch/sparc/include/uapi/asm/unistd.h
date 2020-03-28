@@ -409,7 +409,12 @@
 #define __NR_kcmp		341
 #define __NR_finit_module	342
 
+#ifdef CONFIG_RSBAC
+#define __NR_rsbac              343
+#define NR_SYSCALLS		344
+#else
 #define NR_syscalls		343
+#endif
 
 /* Bitmask values returned from kern_features system call.  */
 #define KERN_FEATURE_MIXED_MODE_STACK	0x00000001

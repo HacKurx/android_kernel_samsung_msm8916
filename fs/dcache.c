@@ -951,7 +951,7 @@ static void shrink_dcache_for_umount_subtree(struct dentry *dentry)
 			__d_shrink(dentry);
 
 			if (dentry->d_count != 0) {
-				printk(KERN_ERR
+				printk(KERN_CRIT
 				       "BUG: Dentry %p{i=%lx,n=%s}"
 				       " still in use (%d)"
 				       " [unmount of %s %s]\n",

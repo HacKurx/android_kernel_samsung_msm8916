@@ -298,6 +298,9 @@
 #define __NR_utimensat			1306
 #define __NR_signalfd			1307
 #define __NR_timerfd			1308
+#ifdef CONFIG_RSBAC
+#define __NR_rsbac                      1308
+#endif
 #define __NR_eventfd			1309
 #define __NR_timerfd_create		1310
 #define __NR_timerfd_settime		1311

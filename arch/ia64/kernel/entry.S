@@ -1758,7 +1758,11 @@ sys_call_table:
 	data8 sys_epoll_pwait			// 1305
 	data8 sys_utimensat
 	data8 sys_signalfd
+#ifdef CONFIG_RSBAC
+	data8 sys_rsbac
+#else
 	data8 sys_ni_syscall
+#endif
 	data8 sys_eventfd
 	data8 sys_timerfd_create		// 1310
 	data8 sys_timerfd_settime

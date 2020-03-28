@@ -270,7 +270,11 @@
 #define __NR_getdents64		248
 #define __NR_fcntl64		249
 				/* 250 is reserved for tux */
+#ifdef CONFIG_RSBAC
+#define __NR_rsbac              251
+#else
 				/* 251 is unused */
+#endif
 #define __NR_gettid		252
 #define __NR_readahead		253
 #define __NR_setxattr		254

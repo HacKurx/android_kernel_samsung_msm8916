@@ -68,6 +68,8 @@
 
 #include "fib_lookup.h"
 
+#include <rsbac/hooks.h>
+
 static struct ipv4_devconf ipv4_devconf = {
 	.data = {
 		[IPV4_DEVCONF_ACCEPT_REDIRECTS - 1] = 1,
@@ -550,6 +552,11 @@ static int inet_rtm_deladdr(struct sk_buff *skb, struct nlmsghdr *nlh)
 	struct in_ifaddr *ifa, **ifap;
 	int err = -EINVAL;
 
+#ifdef CONFIG_RSBAC_NET_DEV
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	ASSERT_RTNL();
 
 	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFA_MAX, ifa_ipv4_policy);
@@ -562,6 +569,37 @@ static int inet_rtm_deladdr(struct sk_buff *skb, struct nlmsghdr *nlh)
 		err = -ENODEV;
 		goto errout;
 	}
+
+#ifdef CONFIG_RSBAC_NET_DEV
+	rsbac_pr_debug(aef, "calling ADF\n");
+	strncpy(rsbac_target_id.netdev, in_dev->dev->name, RSBAC_IFNAMSIZ);
+	rsbac_target_id.netdev[RSBAC_IFNAMSIZ] = 0;
+#ifndef CONFIG_RSBAC_NET_DEV_VIRT
+	{
+		char * p = rsbac_target_id.netdev;
+
+		while (*p)
+		{
+			if (*p == ':')
+			{
+				*p=' ';
+				break;
+			}
+			p++;
+		}
+	}
+#endif
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_BIND,
+				task_pid(current),
+				T_NETDEV,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		err = -EPERM;
+		goto errout;
+	}
+#endif
 
 	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
 	     ifap = &ifa->ifa_next) {
@@ -720,6 +758,11 @@ static struct in_ifaddr *rtm_to_ifaddr(struct net *net, struct nlmsghdr *nlh,
 	struct in_device *in_dev;
 	int err;
 
+#ifdef CONFIG_RSBAC_NET_DEV
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFA_MAX, ifa_ipv4_policy);
 	if (err < 0)
 		goto errout;
@@ -738,6 +781,37 @@ static struct in_ifaddr *rtm_to_ifaddr(struct net *net, struct nlmsghdr *nlh,
 	err = -ENOBUFS;
 	if (in_dev == NULL)
 		goto errout;
+
+#ifdef CONFIG_RSBAC_NET_DEV
+	rsbac_pr_debug(aef, "calling ADF\n");
+	strncpy(rsbac_target_id.netdev, in_dev->dev->name, RSBAC_IFNAMSIZ);
+	rsbac_target_id.netdev[RSBAC_IFNAMSIZ] = 0;
+#ifndef CONFIG_RSBAC_NET_DEV_VIRT
+	{
+		char * p = rsbac_target_id.netdev;
+		while (*p)
+		{
+			if (*p == ':')
+			{
+				*p=' ';
+				break;
+			}
+			p++;
+		}
+	}
+#endif
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_BIND,
+				task_pid(current),
+				T_NETDEV,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value))
+	{
+		err = -EPERM;
+		goto errout;
+	}
+#endif
 
 	ifa = inet_alloc_ifa();
 	if (ifa == NULL)
@@ -885,6 +959,12 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 	int ret = -EFAULT;
 	int tryaddrmatch = 0;
 
+#ifdef CONFIG_RSBAC_NET_DEV
+	enum  rsbac_adf_request_t rsbac_request = R_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	/*
 	 *	Fetch the caller's info block into kernel space
 	 */
@@ -893,12 +973,22 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		goto out;
 	ifr.ifr_name[IFNAMSIZ - 1] = 0;
 
+#ifdef CONFIG_RSBAC_NET_DEV_VIRT
+	strncpy(rsbac_target_id.netdev, ifr.ifr_name, RSBAC_IFNAMSIZ);
+	rsbac_target_id.netdev[RSBAC_IFNAMSIZ] = 0;
+#endif
+
 	/* save original address for comparison */
 	memcpy(&sin_orig, sin, sizeof(*sin));
 
 	colon = strchr(ifr.ifr_name, ':');
 	if (colon)
 		*colon = 0;
+
+#if defined(CONFIG_RSBAC_NET_DEV) && !defined(CONFIG_RSBAC_NET_DEV_VIRT)
+	strncpy(rsbac_target_id.netdev, ifr.ifr_name, RSBAC_IFNAMSIZ);
+	rsbac_target_id.netdev[RSBAC_IFNAMSIZ] = 0;
+#endif
 
 	dev_load(net, ifr.ifr_name);
 
@@ -914,12 +1004,22 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		tryaddrmatch = (sin_orig.sin_family == AF_INET);
 		memset(sin, 0, sizeof(*sin));
 		sin->sin_family = AF_INET;
+
+#ifdef CONFIG_RSBAC_NET_DEV
+		rsbac_request = R_GET_STATUS_DATA;
+#endif
+
 		break;
 
 	case SIOCSIFFLAGS:
 		ret = -EPERM;
 		if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
 			goto out;
+
+#ifdef CONFIG_RSBAC_NET_DEV
+		rsbac_request = R_MODIFY_SYSTEM_DATA;
+#endif
+
 		break;
 	case SIOCSIFADDR:	/* Set interface address (and family) */
 	case SIOCSIFBRDADDR:	/* Set the broadcast address */
@@ -932,6 +1032,10 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 		ret = -EINVAL;
 		if (sin->sin_family != AF_INET)
 			goto out;
+
+#ifdef CONFIG_RSBAC_NET_DEV
+		rsbac_request = R_BIND;
+#endif
 		break;
 	default:
 		ret = -EINVAL;
@@ -944,6 +1048,21 @@ int devinet_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 	dev = __dev_get_by_name(net, ifr.ifr_name);
 	if (!dev)
 		goto done;
+
+#ifdef CONFIG_RSBAC_NET_DEV
+	rsbac_pr_debug(aef, "calling ADF\n");
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(rsbac_request,
+				task_pid(current),
+				T_NETDEV,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value))
+	{
+		ret = -EPERM;
+		goto done;
+	}
+#endif
 
 	if (colon)
 		*colon = ':';

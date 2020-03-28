@@ -116,6 +116,8 @@
 #include <linux/security.h>
 #include <linux/freezer.h>
 
+#include <rsbac/hooks.h>
+
 struct hlist_head unix_socket_table[2 * UNIX_HASH_SIZE];
 EXPORT_SYMBOL_GPL(unix_socket_table);
 DEFINE_SPINLOCK(unix_table_lock);
@@ -813,8 +815,23 @@ static int unix_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t       rsbac_target_id;
+#endif
+
 	if (!sk)
 		return 0;
+
+#ifdef CONFIG_RSBAC
+	if (   sock->file
+		&& sock->file->f_dentry
+		&& sock->file->f_dentry->d_inode
+	   ) {
+		rsbac_target_id.ipc.type = I_anonunix;
+		rsbac_target_id.ipc.id.id_nr = sock->file->f_dentry->d_inode->i_ino;
+		rsbac_remove_target(T_IPC, rsbac_target_id);
+	}
+#endif
 
 	unix_release_sock(sk, 0);
 	sock->sk = NULL;
@@ -832,6 +849,12 @@ static int unix_autobind(struct socket *sock)
 	int err;
 	unsigned int retries = 0;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	err = mutex_lock_interruptible(&u->readlock);
 	if (err)
 		return err;
@@ -839,6 +862,29 @@ static int unix_autobind(struct socket *sock)
 	err = 0;
 	if (u->addr)
 		goto out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "unix_autobind() [sys_bind()]: calling ADF\n");
+	rsbac_target_id.ipc.type = I_anonunix;
+	if (   sock->file
+	    && sock->file->f_dentry
+	    && sock->file->f_dentry->d_inode
+	   )
+		rsbac_target_id.ipc.id.id_nr = sock->file->f_dentry->d_inode->i_ino;
+	else
+		rsbac_target_id.ipc.id.id_nr = 0;
+	rsbac_attribute_value.sock_type = sock->type;
+	if (!rsbac_adf_request(R_BIND,
+				task_pid(current),
+				T_IPC,
+				rsbac_target_id,
+				A_sock_type,
+				rsbac_attribute_value)) {
+		rsbac_pr_debug(aef, "unix_autobind() [sys_bind() etc.]: ADF returned NOT_GRANTED\n");
+		err = -EPERM;
+		goto out;
+	}
+#endif
 
 	err = -ENOMEM;
 	addr = kzalloc(sizeof(*addr) + sizeof(short) + 16, GFP_KERNEL);
@@ -878,6 +924,20 @@ retry:
 	__unix_insert_socket(&unix_socket_table[addr->hash], sk);
 	spin_unlock(&unix_table_lock);
 	err = 0;
+
+#ifdef CONFIG_RSBAC
+	rsbac_new_target_id.dummy = 0;
+	if (unlikely(rsbac_adf_set_attr(R_BIND,
+				task_pid(current),
+				T_IPC,
+				rsbac_target_id,
+				T_NONE,
+				rsbac_new_target_id,
+				A_sock_type,
+				rsbac_attribute_value)))
+		rsbac_printk(KERN_WARNING
+				"unix_autobind() [sys_bind() etc.]: rsbac_adf_set_attr() returned error\n");
+#endif
 
 out:	mutex_unlock(&u->readlock);
 	return err;
@@ -980,6 +1040,12 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	struct hlist_head *list;
 	struct path path = { NULL, NULL };
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	err = -EINVAL;
 	if (sunaddr->sun_family != AF_UNIX)
 		goto out;
@@ -1013,6 +1079,31 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	if (u->addr)
 		goto out_up;
 
+#ifdef CONFIG_RSBAC
+	if (!sunaddr->sun_path[0]) {
+		rsbac_pr_debug(aef, "unix_bind() [sys_bind()]: calling ADF\n");
+		rsbac_target_id.ipc.type = I_anonunix;
+		if (   sock->file
+		    && sock->file->f_dentry
+		    && sock->file->f_dentry->d_inode
+		   )
+			rsbac_target_id.ipc.id.id_nr = sock->file->f_dentry->d_inode->i_ino;
+		else
+			rsbac_target_id.ipc.id.id_nr = 0;
+		rsbac_attribute_value.sock_type = sock->type;
+		if (!rsbac_adf_request(R_BIND,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					A_sock_type,
+					rsbac_attribute_value)) {
+			rsbac_pr_debug(aef, "unix_bind() [sys_bind()]: ADF returned NOT_GRANTED\n");
+			err = -EPERM;
+			goto out_up;
+		}
+	}
+#endif
+
 	err = -ENOMEM;
 	addr = kmalloc(sizeof(*addr)+addr_len, GFP_KERNEL);
 	if (!addr)
@@ -1022,6 +1113,12 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	addr->len = addr_len;
 	addr->hash = hash ^ sk->sk_type;
 	atomic_set(&addr->refcnt, 1);
+
+#ifdef CONFIG_RSBAC
+		/* RSBAC add: set credentials so that sendto() can copy them */
+		if (sock->type == SOCK_DGRAM)
+			init_peercred(sk);
+#endif
 
 	if (sun_path[0]) {
 		addr->hash = UNIX_HASH_SIZE;
@@ -1039,6 +1136,21 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		}
 
 		list = &unix_socket_table[addr->hash];
+
+#ifdef CONFIG_RSBAC
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_BIND,
+					task_pid(current),
+					T_IPC,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					A_sock_type,
+					rsbac_attribute_value)))
+			rsbac_printk(KERN_WARNING
+					"unix_bind() [sys_bind()]: rsbac_adf_set_attr() returned error\n");
+#endif
+
 	}
 
 	err = 0;
@@ -1092,6 +1204,14 @@ static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
 	unsigned int hash;
 	int err;
 
+#ifdef CONFIG_RSBAC
+	enum rsbac_target_t rsbac_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (addr->sa_family != AF_UNSPEC) {
 		err = unix_mkname(sunaddr, alen, &hash);
 		if (err < 0)
@@ -1124,6 +1244,47 @@ restart:
 		if (err)
 			goto out_unlock;
 
+#ifdef CONFIG_RSBAC
+		rsbac_pr_debug(aef, "[sys_connect() [sys_socketcall()]]: calling ADF\n");
+		/* Named socket? */
+		if(sunaddr->sun_path[0]) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(other)->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(other)->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(other)->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			rsbac_target_id.ipc.id.id_nr = unix_sk(other)->path.dentry->d_inode->i_ino;
+		}
+		if (   other->sk_peer_pid
+		    && (pid_nr(other->sk_peer_pid) > 0)
+		   ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(other->sk_peer_pid);
+		} else if (   sk->sk_peer_pid
+			   && (pid_nr(sk->sk_peer_pid) > 0)
+		          ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(sk->sk_peer_pid);
+		} else {
+			rsbac_attribute = A_sock_type;
+			rsbac_attribute_value.sock_type = sock->type;
+		}
+		if (!rsbac_adf_request(R_CONNECT,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value)) {
+			rsbac_pr_debug(aef, "[sys_connect() [sys_socketcall()]]: ADF returned NOT_GRANTED\n");
+			err = -EPERM;
+			if (rsbac_attribute == A_process)
+				put_pid(rsbac_attribute_value.process);
+			goto out_unlock;
+		}
+#endif
+
 	} else {
 		/*
 		 *	1003.1g breaking connected state with AF_UNSPEC
@@ -1149,6 +1310,26 @@ restart:
 		unix_peer(sk) = other;
 		unix_state_double_unlock(sk, other);
 	}
+
+#ifdef CONFIG_RSBAC
+	if (rsbac_target != T_NONE) {
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_CONNECT,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value)))
+			rsbac_printk(KERN_WARNING
+					"unix_dgram_connect() [sys_connect() [sys_socketcall()]]: rsbac_adf_set_attr() returned error\n");
+	}
+
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	return 0;
 
 out_unlock:
@@ -1193,6 +1374,15 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	int st;
 	int err;
 	long timeo;
+
+#ifdef CONFIG_RSBAC
+	enum rsbac_target_t rsbac_target = T_NONE;
+	enum rsbac_target_t rsbac_new_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
 
 	err = unix_mkname(sunaddr, addr_len, &hash);
 	if (err < 0)
@@ -1299,6 +1489,57 @@ restart:
 		goto out_unlock;
 	}
 
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "unix_stream_connect() [sys_connect()]: calling ADF\n");
+	/* Named socket? */
+	if (unix_sk(other)->path.dentry&& unix_sk(other)->path.dentry->d_inode) {
+		rsbac_target = T_UNIXSOCK;
+		rsbac_target_id.unixsock.device = unix_sk(other)->path.dentry->d_sb->s_dev;
+		rsbac_target_id.unixsock.inode  = unix_sk(other)->path.dentry->d_inode->i_ino;
+		rsbac_target_id.unixsock.dentry_p = unix_sk(other)->path.dentry;
+	} else {
+		if (other->sk_socket
+                    && other->sk_socket->file
+                    && other->sk_socket->file->f_dentry
+                    && other->sk_socket->file->f_dentry->d_inode
+		   ) {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			rsbac_target_id.ipc.id.id_nr = other->sk_socket->file->f_dentry->d_inode->i_ino;
+		}
+	}
+	if (rsbac_target != T_NONE) {
+		if (   other->sk_peer_pid
+		    && (pid_nr(other->sk_peer_pid) > 0)
+		   ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(other->sk_peer_pid);
+		} else if (   sk->sk_peer_pid
+			   && (pid_nr(sk->sk_peer_pid) > 0)
+		          ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(sk->sk_peer_pid);
+		} else {
+			rsbac_attribute = A_sock_type;
+			rsbac_attribute_value.sock_type = sock->type;
+		}
+		if (!rsbac_adf_request(R_CONNECT,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value)) {
+			rsbac_pr_debug(aef, "[sys_connect() [sys_socketcall()]]:"
+					" ADF returned NOT_GRANTED\n");
+			err = -EPERM;
+			unix_state_unlock(sk);
+			if (rsbac_attribute == A_process)
+				put_pid(rsbac_attribute_value.process);
+			goto out_unlock;
+		}
+	}
+#endif
+
 	/* The way is open! Fastly set all the necessary fields... */
 
 	sock_hold(sk);
@@ -1338,6 +1579,56 @@ restart:
 	spin_unlock(&other->sk_receive_queue.lock);
 	unix_state_unlock(other);
 	other->sk_data_ready(other, 0);
+
+#ifdef CONFIG_RSBAC
+	if (rsbac_target != T_NONE) {
+		if (newu->path.dentry&& newu->path.dentry->d_inode) {
+			rsbac_new_target = T_UNIXSOCK;
+			rsbac_new_target_id.unixsock.device = newu->path.dentry->d_sb->s_dev;
+			rsbac_new_target_id.unixsock.inode  = newu->path.dentry->d_inode->i_ino;
+			rsbac_new_target_id.unixsock.dentry_p = newu->path.dentry;
+		} else {
+			if (newsk->sk_socket
+	                    && newsk->sk_socket->file
+	                    && newsk->sk_socket->file->f_dentry
+	                    && newsk->sk_socket->file->f_dentry->d_inode
+			   ) {
+				rsbac_new_target = T_IPC;
+				rsbac_new_target_id.ipc.type = I_anonunix;
+				rsbac_new_target_id.ipc.id.id_nr = newsk->sk_socket->file->f_dentry->d_inode->i_ino;
+			}
+		}
+		if (unlikely(rsbac_adf_set_attr(R_CONNECT,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					rsbac_new_target,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value)))
+			rsbac_printk(KERN_WARNING
+					"unix_stream_connect() [sys_connect() [sys_socketcall()]]: rsbac_adf_set_attr() returned error\n");
+#ifdef CONFIG_RSBAC_NET
+#ifdef CONFIG_RSBAC_DEBUG
+		if (   rsbac_debug_aef_net
+		    && sk->sk_socket
+		    && newsk->sk_socket
+		    && other->sk_socket
+		   ) {
+			rsbac_printk("unix_stream_connect() [sys_connect()]: connected from %u to %u (type %u), orig %u\n",
+			sk->sk_socket->file->f_dentry->d_inode->i_ino,
+			newsk->sk_socket->file->f_dentry->d_inode->i_ino,
+			rsbac_target,
+			other->sk_socket->file->f_dentry->d_inode->i_ino);
+		}
+#endif
+#endif
+	}
+
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	sock_put(other);
 	return 0;
 
@@ -1419,6 +1710,21 @@ static int unix_accept(struct socket *sock, struct socket *newsock, int flags)
 	unix_state_lock(tsk);
 	newsock->state = SS_CONNECTED;
 	unix_sock_inherit_flags(sock, newsock);
+
+#ifdef CONFIG_RSBAC
+	/* copy dentry and mnt, if there */
+	if (unix_sk(sk)->path.dentry) {
+		if (!unix_sk(tsk)->path.dentry) {
+			unix_sk(tsk)->path.dentry = dget(unix_sk(sk)->path.dentry);
+			unix_sk(tsk)->path.mnt = mntget(unix_sk(sk)->path.mnt);
+		}
+		if (newsock->sk && !unix_sk(newsock->sk)->path.dentry) {
+			unix_sk(newsock->sk)->path.dentry = dget(unix_sk(sk)->path.dentry);
+			unix_sk(newsock->sk)->path.mnt = mntget(unix_sk(sk)->path.mnt);
+		}
+	}
+#endif
+
 	sock_graft(tsk, newsock);
 	unix_state_unlock(tsk);
 	return 0;
@@ -1597,6 +1903,14 @@ static int unix_dgram_sendmsg(struct kiocb *kiocb, struct socket *sock,
 	int data_len = 0;
 	int sk_locked;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (NULL == siocb->scm)
 		siocb->scm = &tmp_scm;
 	wait_for_unix_gc();
@@ -1720,6 +2034,61 @@ restart_locked:
 			goto out_unlock;
 	}
 
+#if defined(CONFIG_RSBAC)
+	if (other->sk_socket) {
+		if (rsbac_attribute == A_process) {
+			put_pid(rsbac_attribute_value.process);
+		}
+		rsbac_pr_debug(aef, "unix_dgram_sendmsg() [sys_send(), sys_sendto(), sys_sendmsg()]: calling ADF\n");
+		if (   other->sk_socket->sk
+		    && unix_sk(other->sk_socket->sk)->path.dentry
+		    && unix_sk(other->sk_socket->sk)->path.dentry->d_sb
+		    && unix_sk(other->sk_socket->sk)->path.dentry->d_inode
+		   ) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(other->sk_socket->sk)->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(other->sk_socket->sk)->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(other->sk_socket->sk)->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			if (   other->sk_socket->file
+			    && other->sk_socket->file->f_dentry
+			    && other->sk_socket->file->f_dentry->d_inode
+			   )
+				rsbac_target_id.ipc.id.id_nr = other->sk_socket->file->f_dentry->d_inode->i_ino;
+			else
+				rsbac_target_id.ipc.id.id_nr = 0;
+		}
+		if (   sk->sk_peer_pid
+		    && (pid_nr(sk->sk_peer_pid) > 0)
+		   ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(sk->sk_peer_pid);
+		} else if (   other->sk_socket->sk
+		    && other->sk_socket->sk->sk_peer_pid
+		    && (pid_nr(other->sk_socket->sk->sk_peer_pid) > 0)
+		   ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(other->sk_socket->sk->sk_peer_pid);
+		} else {
+			rsbac_attribute = A_sock_type;
+			rsbac_attribute_value.sock_type = sock->type;
+		}
+		if(!rsbac_adf_request(R_SEND,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))	{
+			err = -EPERM;
+			if (rsbac_attribute == A_process)
+				put_pid(rsbac_attribute_value.process);
+			goto out_unlock;
+		}
+	}
+#endif
+
 	if (unlikely(unix_peer(other) != sk && unix_recvq_full(other))) {
 		if (timeo) {
 			timeo = unix_wait_for_peer(other, timeo);
@@ -1762,6 +2131,26 @@ restart_locked:
 	other->sk_data_ready(other, len);
 	sock_put(other);
 	scm_destroy(siocb->scm);
+
+#if defined(CONFIG_RSBAC)
+	if (len > 0 && (rsbac_target != T_NONE)) {
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_SEND,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"unix_dgram_sendmsg() [sys_send(), sys_sendto(), sys_sendmsg()]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	return len;
 
 out_unlock:
@@ -1791,6 +2180,14 @@ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 	bool fds_sent = false;
 	int max_level;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (NULL == siocb->scm)
 		siocb->scm = &tmp_scm;
 	wait_for_unix_gc();
@@ -1814,6 +2211,56 @@ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 
 	if (sk->sk_shutdown & SEND_SHUTDOWN)
 		goto pipe_err;
+
+#if defined(CONFIG_RSBAC)
+	if (other->sk_socket) {
+		rsbac_pr_debug(aef, "unix_stream_sendmsg() [sys_send(), sys_sendto(), sys_sendmsg()]: calling ADF\n");
+		if (   other->sk_socket->sk
+		    && unix_sk(other->sk_socket->sk)->path.dentry
+		    && unix_sk(other->sk_socket->sk)->path.dentry->d_sb
+		    && unix_sk(other->sk_socket->sk)->path.dentry->d_inode
+		   ) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(other->sk_socket->sk)->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(other->sk_socket->sk)->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(other->sk_socket->sk)->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			if (   other->sk_socket->file
+			    && other->sk_socket->file->f_dentry
+			    && other->sk_socket->file->f_dentry->d_inode
+			   )
+				rsbac_target_id.ipc.id.id_nr = other->sk_socket->file->f_dentry->d_inode->i_ino;
+			else
+				rsbac_target_id.ipc.id.id_nr = 0;
+		}
+		if (   sk->sk_peer_pid
+		    && (pid_nr(sk->sk_peer_pid) > 0)
+		   ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(sk->sk_peer_pid);
+		} else if (   other->sk_socket->sk
+		    && other->sk_socket->sk->sk_peer_pid
+		    && (pid_nr(other->sk_socket->sk->sk_peer_pid) > 0)
+		   ) {
+			rsbac_attribute = A_process;
+			rsbac_attribute_value.process = get_pid(other->sk_socket->sk->sk_peer_pid);
+		} else {
+			rsbac_attribute = A_sock_type;
+			rsbac_attribute_value.sock_type = sock->type;
+		}
+		if(!rsbac_adf_request(R_SEND,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))	{
+			err = -EPERM;
+			goto out_err;
+		}
+	}
+#endif
 
 	while (sent < len) {
 		/*
@@ -1883,6 +2330,25 @@ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 	scm_destroy(siocb->scm);
 	siocb->scm = NULL;
 
+#if defined(CONFIG_RSBAC)
+	if (sent && (rsbac_target != T_NONE)) {
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_SEND,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"unix_stream_sendmsg() [sys_send(), sys_sendto(), sys_sendmsg()]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	return sent;
 
 pipe_err_free:
@@ -1895,6 +2361,26 @@ pipe_err:
 out_err:
 	scm_destroy(siocb->scm);
 	siocb->scm = NULL;
+
+#if defined(CONFIG_RSBAC)
+	if (sent) {
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_SEND,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"unix_stream_sendmsg() [sys_send(), sys_sendto(), sys_sendmsg()]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	return sent ? : err;
 }
 
@@ -1952,9 +2438,78 @@ static int unix_dgram_recvmsg(struct kiocb *iocb, struct socket *sock,
 	int err;
 	int peeked, skip;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	err = -EOPNOTSUPP;
 	if (flags&MSG_OOB)
 		goto out;
+
+#if defined(CONFIG_RSBAC)
+	rsbac_pr_debug(aef, "unix_dgram_recvmsg() [sys_recv(), sys_recvfrom(), sys_recvmsg()]: calling ADF\n");
+	if (unix_peer(sk)) {
+		if (   unix_sk(unix_peer(sk))->path.dentry
+		    && unix_sk(unix_peer(sk))->path.dentry->d_sb
+		    && unix_sk(unix_peer(sk))->path.dentry->d_inode
+		   ) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(unix_peer(sk))->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(unix_peer(sk))->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(unix_peer(sk))->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			if (   unix_peer(sk)->sk_socket
+			    && unix_peer(sk)->sk_socket->file
+			    && unix_peer(sk)->sk_socket->file->f_dentry
+			    && unix_peer(sk)->sk_socket->file->f_dentry->d_inode
+			   )
+				rsbac_target_id.ipc.id.id_nr = unix_peer(sk)->sk_socket->file->f_dentry->d_inode->i_ino;
+		}
+	} else {
+		if (   unix_sk(sk)->path.dentry
+		    && unix_sk(sk)->path.dentry->d_inode
+		   ) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(sk)->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(sk)->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(sk)->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			if (   sock->file
+			    && sock->file->f_dentry
+			    && sock->file->f_dentry->d_inode
+			   )
+				rsbac_target_id.ipc.id.id_nr = sock->file->f_dentry->d_inode->i_ino;
+			else
+				rsbac_target_id.ipc.id.id_nr = 0;
+		}
+	}
+	if (   sk->sk_peer_pid
+	    && (pid_nr(sk->sk_peer_pid) > 0)
+	   ) {
+		rsbac_attribute = A_process;
+		rsbac_attribute_value.process = get_pid(sk->sk_peer_pid);
+	} else {
+		rsbac_attribute = A_sock_type;
+		rsbac_attribute_value.sock_type = sock->type;
+	}
+	if(!rsbac_adf_request(R_RECEIVE,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				rsbac_attribute,
+				rsbac_attribute_value))	{
+		err = -EPERM;
+		goto out;
+	}
+#endif
 
 	err = mutex_lock_interruptible(&u->readlock);
 	if (unlikely(err)) {
@@ -2036,6 +2591,26 @@ out_free:
 out_unlock:
 	mutex_unlock(&u->readlock);
 out:
+
+#if defined(CONFIG_RSBAC)
+	if (err > 0) {
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_RECEIVE,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"unix_dgram_recvmsg() [sys_recv(), sys_recvfrom(), sys_recvmsg()]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	return err;
 }
 
@@ -2092,6 +2667,14 @@ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 	long timeo;
 	int skip;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	err = -EINVAL;
 	if (sk->sk_state != TCP_ESTABLISHED)
 		goto out;
@@ -2099,6 +2682,67 @@ static int unix_stream_recvmsg(struct kiocb *iocb, struct socket *sock,
 	err = -EOPNOTSUPP;
 	if (flags&MSG_OOB)
 		goto out;
+
+#if defined(CONFIG_RSBAC)
+	rsbac_pr_debug(aef, "unix_stream_recvmsg() [sys_recv(), sys_recvfrom(), sys_recvmsg()]: calling ADF\n");
+	if (unix_peer(sk)) {
+		if (   unix_sk(unix_peer(sk))->path.dentry
+		    && unix_sk(unix_peer(sk))->path.dentry->d_sb
+		    && unix_sk(unix_peer(sk))->path.dentry->d_inode
+		   ) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(unix_peer(sk))->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(unix_peer(sk))->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(unix_peer(sk))->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			if (   unix_peer(sk)->sk_socket
+			    && unix_peer(sk)->sk_socket->file
+			    && unix_peer(sk)->sk_socket->file->f_dentry
+			    && unix_peer(sk)->sk_socket->file->f_dentry->d_inode
+			   )
+				rsbac_target_id.ipc.id.id_nr = unix_peer(sk)->sk_socket->file->f_dentry->d_inode->i_ino;
+		}
+	} else {
+		if (   unix_sk(sk)->path.dentry
+		    && unix_sk(sk)->path.dentry->d_inode
+		   ) {
+			rsbac_target = T_UNIXSOCK;
+			rsbac_target_id.unixsock.device = unix_sk(sk)->path.dentry->d_sb->s_dev;
+			rsbac_target_id.unixsock.inode  = unix_sk(sk)->path.dentry->d_inode->i_ino;
+			rsbac_target_id.unixsock.dentry_p = unix_sk(sk)->path.dentry;
+		} else {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			if (   sock->file
+			    && sock->file->f_dentry
+			    && sock->file->f_dentry->d_inode
+			   )
+				rsbac_target_id.ipc.id.id_nr = sock->file->f_dentry->d_inode->i_ino;
+			else
+				rsbac_target_id.ipc.id.id_nr = 0;
+		}
+	}
+	if (   sk->sk_peer_pid
+	    && (pid_nr(sk->sk_peer_pid) > 0)
+	   ) {
+		rsbac_attribute = A_process;
+		rsbac_attribute_value.process = get_pid(sk->sk_peer_pid);
+	} else {
+		rsbac_attribute = A_sock_type;
+		rsbac_attribute_value.sock_type = sock->type;
+	}
+	if(!rsbac_adf_request(R_RECEIVE,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				rsbac_attribute,
+				rsbac_attribute_value))	{
+		err = -EPERM;
+		goto out;
+	}
+#endif
 
 	target = sock_rcvlowat(sk, flags&MSG_WAITALL, size);
 	timeo = sock_rcvtimeo(sk, noblock);
@@ -2243,6 +2887,25 @@ again:
 	mutex_unlock(&u->readlock);
 	scm_recv(sock, msg, siocb->scm, flags);
 out:
+#if defined(CONFIG_RSBAC)
+	if (copied > 0) {
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_RECEIVE,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"unix_stream_recvmsg() [sys_recv(), sys_recvfrom(), sys_recvmsg()]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+	if (rsbac_attribute == A_process)
+		put_pid(rsbac_attribute_value.process);
+#endif
+
 	return copied ? : err;
 }
 

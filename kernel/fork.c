@@ -79,6 +79,8 @@
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 
+#include <rsbac/hooks.h>
+
 #include <trace/events/sched.h>
 
 #define CREATE_TRACE_POINTS
@@ -627,6 +629,32 @@ void __mmdrop(struct mm_struct *mm)
 	free_mm(mm);
 }
 EXPORT_SYMBOL_GPL(__mmdrop);
+
+#ifdef CONFIG_RSBAC
+/* yes, i hate putting new functions here as much as ao does. seems like we
+ * have no choice because mmput() is beeing used from rsbac_adf_request_int()
+ * which in turn cannot be sleeping when called from do_exit(). michal. */
+void mmput_nosleep(struct mm_struct *mm)
+{
+	if (atomic_dec_and_test(&mm->mm_users)) {
+		uprobe_clear_state(mm);
+		exit_aio(mm);
+		ksm_exit(mm);
+		khugepaged_exit(mm); /* must run before exit_mmap */
+		exit_mmap(mm);
+		set_mm_exe_file(mm, NULL);
+		if (!list_empty(&mm->mmlist)) {
+			spin_lock(&mmlist_lock);
+			list_del(&mm->mmlist);
+			spin_unlock(&mmlist_lock);
+		}
+		if (mm->binfmt)
+			module_put(mm->binfmt->module);
+		mmdrop(mm);
+	}
+}
+EXPORT_SYMBOL_GPL(mmput_nosleep);
+#endif
 
 /*
  * Decrement the use count and release all resources for an mm.
@@ -1634,7 +1662,12 @@ struct task_struct * __cpuinit fork_idle(int cpu)
  * It copies the process, and if successful kick-starts
  * it and waits for it to finish using the VM if required.
  */
+
+#ifdef CONFIG_RSBAC
+long do_fork(unsigned long long clone_flags,
+#else
 long do_fork(unsigned long clone_flags,
+#endif
 	      unsigned long stack_start,
 	      unsigned long stack_size,
 	      int __user *parent_tidptr,
@@ -1643,6 +1676,30 @@ long do_fork(unsigned long clone_flags,
 	struct task_struct *p;
 	int trace = 0;
 	long nr;
+
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t rsbac_attribute;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
+#ifdef CONFIG_RSBAC
+	rsbac_attribute = A_none;
+	rsbac_attribute_value.dummy = 0;
+	if(current->pid) {
+		rsbac_pr_debug(aef, "[sys_fork(),sys_clone(),sys_vfork]: calling ADF\n");
+		rsbac_target_id.process = task_pid(current);
+		if (!rsbac_adf_request(R_CLONE,
+					rsbac_target_id.process,
+					T_PROCESS,
+					rsbac_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value)) {
+			return -EPERM;
+		}
+	}
+#endif
 
 	/*
 	 * Do some preliminary argument and permissions checking before we
@@ -1695,6 +1752,33 @@ long do_fork(unsigned long clone_flags,
 			get_task_struct(p);
 		}
 
+#ifdef CONFIG_RSBAC
+		if (clone_flags & CLONE_KTHREAD) {
+			rsbac_attribute = A_kernel_thread;
+			rsbac_attribute_value.kernel_thread = 1;
+			rsbac_mark_kthread(task_pid(p));
+			rsbac_kthread_notify(task_pid(p));
+		}
+
+		if (current->pid)
+		{
+			rsbac_pr_debug(aef, "[sys_fork(),sys_clone(),sys_vfork()]: calling ADF_set_attr\n");
+			rsbac_target_id.process = task_pid(current);
+			rsbac_new_target_id.process = task_pid(p);
+			if (unlikely(rsbac_adf_set_attr(R_CLONE,
+						rsbac_target_id.process,
+						T_PROCESS,
+						rsbac_target_id,
+						T_PROCESS,
+						rsbac_new_target_id,
+						rsbac_attribute,
+						rsbac_attribute_value))) {
+				rsbac_printk(KERN_WARNING
+						"do_fork() [sys_fork(), sys_clone()]: rsbac_adf_set_attr() returned error!\n");
+			}
+		}
+#endif
+
 		wake_up_new_task(p);
 
 		/* forking complete and child started to run, tell ptracer */
@@ -1718,8 +1802,13 @@ long do_fork(unsigned long clone_flags,
  */
 pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 {
+#ifdef CONFIG_RSBAC
+	return do_fork(flags|CLONE_VM|CLONE_UNTRACED|CLONE_KTHREAD, (unsigned long)fn,
+		(unsigned long)arg, NULL, NULL);
+#else
 	return do_fork(flags|CLONE_VM|CLONE_UNTRACED, (unsigned long)fn,
 		(unsigned long)arg, NULL, NULL);
+#endif
 }
 
 #ifdef __ARCH_WANT_SYS_FORK

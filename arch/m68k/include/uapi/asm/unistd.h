@@ -223,7 +223,9 @@
 #define __NR_setfsuid32		215
 #define __NR_setfsgid32		216
 #define __NR_pivot_root		217
-/* 218*/
+#ifdef CONFIG_RSBAC
+#define __NR_rsbac              218
+#endif
 /* 219*/
 #define __NR_getdents64		220
 #define __NR_gettid		221

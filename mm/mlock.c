@@ -19,6 +19,8 @@
 #include <linux/mmzone.h>
 #include <linux/hugetlb.h>
 
+#include <rsbac/hooks.h>
+
 #include "internal.h"
 
 int can_do_mlock(void)
@@ -455,8 +457,28 @@ SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
 	unsigned long lock_limit;
 	int error = -ENOMEM;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!can_do_mlock())
 		return -EPERM;
+
+#ifdef CONFIG_RSBAC
+	rsbac_target_id.scd = ST_mlock;
+	rsbac_attribute_value.dummy = 0;
+	rsbac_pr_debug(aef, "calling ADF\n");
+	if (!rsbac_adf_request(R_MODIFY_SYSTEM_DATA,
+				task_pid(current),
+				T_SCD,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value))
+	{
+		return -EPERM;
+	}
+#endif
 
 	lru_add_drain_all();	/* flush pagevec */
 
@@ -521,12 +543,32 @@ SYSCALL_DEFINE1(mlockall, int, flags)
 	unsigned long lock_limit;
 	int ret = -EINVAL;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!flags || (flags & ~(MCL_CURRENT | MCL_FUTURE)))
 		goto out;
 
 	ret = -EPERM;
 	if (!can_do_mlock())
 		goto out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_target_id.scd = ST_mlock;
+	rsbac_attribute_value.dummy = 0;
+	rsbac_pr_debug(aef, "calling ADF\n");
+	if (!rsbac_adf_request(R_MODIFY_SYSTEM_DATA,
+				task_pid(current),
+				T_SCD,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		ret = -EPERM;
+		goto out;
+	}
+#endif
 
 	if (flags & MCL_CURRENT)
 		lru_add_drain_all();	/* flush pagevec */

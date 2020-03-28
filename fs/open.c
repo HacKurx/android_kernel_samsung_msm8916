@@ -34,15 +34,50 @@
 
 #include "internal.h"
 
+#ifdef CONFIG_RSBAC
+#include <net/sock.h>
+#endif
+#include <rsbac/hooks.h>
+
 int do_truncate2(struct vfsmount *mnt, struct dentry *dentry, loff_t length,
 		unsigned int time_attrs, struct file *filp)
 {
 	int ret;
 	struct iattr newattrs;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#ifdef CONFIG_RSBAC_SECDEL
+	loff_t old_len = dentry->d_inode->i_size;
+#endif
+#endif
+
 	/* Not pretty: "inode->i_size" shouldn't really be signed. But it is. */
 	if (length < 0)
 		return -EINVAL;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[open_namei(), do_sys_truncate() [sys_truncate()]]: calling ADF\n");
+	rsbac_target_id.file.device = dentry->d_inode->i_sb->s_dev;
+	rsbac_target_id.file.inode  = dentry->d_inode->i_ino;
+	rsbac_target_id.file.dentry_p = dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_TRUNCATE,
+				task_pid(current),
+				T_FILE,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		return -EPERM;
+	}
+#endif
+
+	/* RSBAC: Overwrite truncated part, if asked by flag */
+#ifdef CONFIG_RSBAC_SECDEL
+	rsbac_sec_trunc(dentry, length, old_len);
+#endif
 
 	newattrs.ia_size = length;
 	newattrs.ia_valid = ATTR_SIZE | time_attrs;
@@ -59,6 +94,25 @@ int do_truncate2(struct vfsmount *mnt, struct dentry *dentry, loff_t length,
 	mutex_lock(&dentry->d_inode->i_mutex);
 	ret = notify_change2(mnt, dentry, &newattrs);
 	mutex_unlock(&dentry->d_inode->i_mutex);
+
+#ifdef CONFIG_RSBAC
+	if (!ret) {
+		rsbac_pr_debug(aef, "[open_namei(), do_sys_truncate() [sys_truncate()]]: notifying ADF\n");
+		rsbac_new_target_id.dummy = 0;
+		if (unlikely(rsbac_adf_set_attr(R_TRUNCATE,
+					task_pid(current),
+					T_FILE,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					A_none,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"do_truncate() [open_namei(), do_sys_truncate() [sys_truncate()]]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+#endif
+
 	return ret;
 }
 int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
@@ -86,6 +140,11 @@ long vfs_truncate(struct path *path, loff_t length)
 	if (error)
 		goto out;
 
+#ifdef CONFIG_RSBAC_ALLOW_DAC_DISABLE_PART
+        if (rsbac_dac_part_disabled(path->dentry))
+		error = 0;
+	else
+#endif
 	error = inode_permission2(mnt, inode, MAY_WRITE);
 	if (error)
 		goto mnt_drop_write_and_out;
@@ -234,6 +293,10 @@ int do_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
 	struct inode *inode = file_inode(file);
 	long ret;
+#ifdef CONFIG_RSBAC_RW
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
 
 	if (offset < 0 || len <= 0)
 		return -EINVAL;
@@ -264,6 +327,21 @@ int do_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 	ret = security_file_permission(file, MAY_WRITE);
 	if (ret)
 		return ret;
+
+#ifdef CONFIG_RSBAC_RW
+	rsbac_pr_debug(aef, "sys_fallocate(): calling ADF\n");
+	rsbac_target_id.file.device = inode->i_sb->s_dev;
+	rsbac_target_id.file.inode = inode->i_ino;
+	rsbac_target_id.file.dentry_p = file->f_path.dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_WRITE,
+			task_pid(current),
+			T_FILE,
+			rsbac_target_id,
+			A_none,
+			rsbac_attribute_value))
+		return -EPERM;
+#endif
 
 	if (S_ISFIFO(inode->i_mode))
 		return -ESPIPE;
@@ -315,6 +393,12 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	int res;
 	unsigned int lookup_flags = LOOKUP_FOLLOW;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
 		return -EINVAL;
 
@@ -328,7 +412,11 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	if (!issecure(SECURE_NO_SETUID_FIXUP)) {
 		/* Clear the capabilities if we switch to a non-root user */
 		kuid_t root_uid = make_kuid(override_cred->user_ns, 0);
-		if (!uid_eq(override_cred->uid, root_uid))
+		if (!uid_eq(override_cred->uid, root_uid)
+#ifdef CONFIG_RSBAC_FAKE_ROOT_UID
+			&& !rsbac_uid_faked()
+#endif
+		)
 			cap_clear(override_cred->cap_effective);
 		else
 			override_cred->cap_effective =
@@ -340,6 +428,32 @@ retry:
 	res = user_path_at(dfd, filename, lookup_flags, &path);
 	if (res)
 		goto out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "calling ADF\n");
+	rsbac_target = T_FILE;
+	if (S_ISDIR(path.dentry->d_inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(path.dentry->d_inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(path.dentry->d_inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(path.dentry->d_inode->i_mode))
+		rsbac_target = T_UNIXSOCK;
+	rsbac_target_id.file.device = path.dentry->d_inode->i_sb->s_dev;
+	rsbac_target_id.file.inode  = path.dentry->d_inode->i_ino;
+	rsbac_target_id.file.dentry_p = path.dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_GET_PERMISSIONS_DATA,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		res = -EPERM;
+		goto out_path_release;
+	}
+#endif
 
 	inode = path.dentry->d_inode;
 	mnt = path.mnt;
@@ -393,14 +507,42 @@ SYSCALL_DEFINE1(chdir, const char __user *, filename)
 	struct path path;
 	int error;
 	unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
+
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 retry:
 	error = user_path_at(AT_FDCWD, filename, lookup_flags, &path);
 	if (error)
 		goto out;
 
+#ifdef CONFIG_RSBAC_ALLOW_DAC_DISABLE_PART
+	if (rsbac_dac_part_disabled(path.dentry))
+		error = 0;
+	else
+#endif
 	error = inode_permission2(path.mnt, path.dentry->d_inode, MAY_EXEC | MAY_CHDIR);
 	if (error)
 		goto dput_and_out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "calling ADF\n");
+	rsbac_target_id.dir.device = path.dentry->d_inode->i_sb->s_dev;
+	rsbac_target_id.dir.inode  = path.dentry->d_inode->i_ino;
+	rsbac_target_id.dir.dentry_p = path.dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_CHDIR,
+				task_pid(current),
+				T_DIR,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto dput_and_out;
+	}
+#endif
 
 	set_fs_pwd(current->fs, &path);
 
@@ -421,6 +563,11 @@ SYSCALL_DEFINE1(fchdir, unsigned int, fd)
 	struct vfsmount *mnt;
 	int error = -EBADF;
 
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	error = -EBADF;
 	if (!f.file)
 		goto out;
@@ -432,7 +579,32 @@ SYSCALL_DEFINE1(fchdir, unsigned int, fd)
 	if (!S_ISDIR(inode->i_mode))
 		goto out_putf;
 
+#ifdef CONFIG_RSBAC_ALLOW_DAC_DISABLE_PART
+	if (rsbac_dac_part_disabled(f.file->f_path.dentry))
+		error = 0;
+	else
+#endif
+
 	error = inode_permission2(mnt, inode, MAY_EXEC | MAY_CHDIR);
+
+#ifdef CONFIG_RSBAC
+	if (!error) {
+		rsbac_pr_debug(aef, "calling ADF\n");
+		rsbac_target_id.dir.device = inode->i_sb->s_dev;
+		rsbac_target_id.dir.inode  = inode->i_ino;
+		rsbac_target_id.dir.dentry_p = f.file->f_path.dentry;
+		rsbac_attribute_value.dummy = 0;
+		if (!rsbac_adf_request(R_CHDIR,
+					task_pid(current),
+					T_DIR,
+					rsbac_target_id,
+					A_none,
+					rsbac_attribute_value)) {
+			error = -EPERM;
+		}
+	}
+#endif
+
 	if (!error)
 		set_fs_pwd(current->fs, &f.file->f_path);
 out_putf:
@@ -446,11 +618,22 @@ SYSCALL_DEFINE1(chroot, const char __user *, filename)
 	struct path path;
 	int error;
 	unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_DIRECTORY;
+
+#ifdef CONFIG_RSBAC
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 retry:
 	error = user_path_at(AT_FDCWD, filename, lookup_flags, &path);
 	if (error)
 		goto out;
 
+#ifdef CONFIG_RSBAC_ALLOW_DAC_DISABLE_PART
+	if (rsbac_dac_part_disabled(path.dentry))
+		error = 0;
+	else
+#endif
 	error = inode_permission2(path.mnt, path.dentry->d_inode, MAY_EXEC | MAY_CHDIR);
 	if (error)
 		goto dput_and_out;
@@ -461,6 +644,23 @@ retry:
 	error = security_path_chroot(&path);
 	if (error)
 		goto dput_and_out;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "calling ADF\n");
+	rsbac_target_id.dir.device = path.dentry->d_inode->i_sb->s_dev;
+	rsbac_target_id.dir.inode  = path.dentry->d_inode->i_ino;
+	rsbac_target_id.dir.dentry_p = path.dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_CHDIR,
+				task_pid(current),
+				T_DIR,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		error = -EPERM;
+		goto dput_and_out;
+	}
+#endif
 
 	set_fs_root(current->fs, &path);
 	error = 0;
@@ -480,9 +680,50 @@ static int chmod_common(struct path *path, umode_t mode)
 	struct iattr newattrs;
 	int error;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	error = mnt_want_write(path->mnt);
 	if (error)
 		return error;
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "calling ADF\n");
+	rsbac_target = T_FILE;
+	rsbac_target_id.file.device = inode->i_sb->s_dev;
+	rsbac_target_id.file.inode  = inode->i_ino;
+	rsbac_target_id.file.dentry_p = path->dentry;
+	if (S_ISDIR(inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(inode->i_mode)) {
+		if(inode->i_sb->s_magic == SOCKFS_MAGIC) {
+			rsbac_target = T_IPC;
+			rsbac_target_id.ipc.type = I_anonunix;
+			rsbac_target_id.ipc.id.id_nr = inode->i_ino;
+		} else {
+			rsbac_target = T_UNIXSOCK;
+		}
+	}
+	rsbac_attribute_value.mode = mode;
+	if (!rsbac_adf_request(R_MODIFY_PERMISSIONS_DATA,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_mode,
+				rsbac_attribute_value))
+	{
+		mnt_drop_write(path->mnt);
+		return -EPERM;
+	}
+#endif
+
 	mutex_lock(&inode->i_mutex);
 	error = security_path_chmod(path, mode);
 	if (error)
@@ -541,8 +782,39 @@ static int chown_common(struct path *path, uid_t user, gid_t group)
 	kuid_t uid;
 	kgid_t gid;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	uid = make_kuid(current_user_ns(), user);
 	gid = make_kgid(current_user_ns(), group);
+
+#ifdef CONFIG_RSBAC
+	rsbac_pr_debug(aef, "[sys_*chown]: calling ADF\n");
+	rsbac_target = T_FILE;
+	if (S_ISDIR(inode->i_mode))
+		rsbac_target = T_DIR;
+	else if (S_ISFIFO(inode->i_mode))
+		rsbac_target = T_FIFO;
+	else if (S_ISLNK(inode->i_mode))
+		rsbac_target = T_SYMLINK;
+	else if (S_ISSOCK(inode->i_mode))
+		rsbac_target = T_UNIXSOCK;
+	rsbac_target_id.file.device = inode->i_sb->s_dev;
+	rsbac_target_id.file.inode  = inode->i_ino;
+	rsbac_target_id.file.dentry_p = path->dentry;
+	rsbac_attribute_value.dummy = 0;
+	if (!rsbac_adf_request(R_CHANGE_OWNER,
+				task_pid(current),
+				rsbac_target,
+				rsbac_target_id,
+				A_none,
+				rsbac_attribute_value)) {
+		return -EPERM;
+	}
+#endif
 
 	newattrs.ia_valid =  ATTR_CTIME;
 	if (user != (uid_t) -1) {
@@ -1007,10 +1279,91 @@ int filp_close(struct file *filp, fl_owner_t id)
 {
 	int retval = 0;
 
+#ifdef CONFIG_RSBAC
+	enum  rsbac_target_t rsbac_target = T_NONE;
+	union rsbac_target_id_t rsbac_target_id;
+	union rsbac_target_id_t rsbac_new_target_id;
+	enum  rsbac_attribute_t       rsbac_attribute = A_none;
+	union rsbac_attribute_value_t rsbac_attribute_value;
+#endif
+
 	if (!file_count(filp)) {
 		printk(KERN_ERR "VFS: Close: file count is 0\n");
 		return 0;
 	}
+
+#ifdef CONFIG_RSBAC
+	if (filp && filp->f_dentry && filp->f_dentry->d_inode) {
+		rsbac_pr_debug(aef, "[sys_close]: calling ADF\n");
+		rsbac_target = T_NONE;
+		if (S_ISBLK(filp->f_dentry->d_inode->i_mode)
+			|| S_ISCHR(filp->f_dentry->d_inode->i_mode)) {
+			rsbac_target = T_DEV;
+			if (S_ISBLK(filp->f_dentry->d_inode->i_mode)) {
+				rsbac_target_id.dev.type = D_block;
+			}
+			else {
+				rsbac_target_id.dev.type = D_char;
+			}
+			rsbac_target_id.dev.major = RSBAC_MAJOR(filp->f_dentry->d_inode->i_sb->s_dev);
+			rsbac_target_id.dev.minor = RSBAC_MINOR(filp->f_dentry->d_inode->i_sb->s_dev);
+			rsbac_attribute = A_f_mode;
+			rsbac_attribute_value.f_mode = filp->f_mode;
+		} else
+			if (S_ISSOCK(filp->f_dentry->d_inode->i_mode)) {
+				if (SOCKET_I(filp->f_dentry->d_inode)->ops
+					&& (SOCKET_I(filp->f_dentry->d_inode)->ops->family == AF_UNIX)) {
+					if (filp->f_dentry->d_sb->s_magic == SOCKFS_MAGIC) {
+						rsbac_target = T_IPC;
+						rsbac_target_id.ipc.type = I_anonunix;
+						rsbac_target_id.ipc.id.id_nr = filp->f_dentry->d_inode->i_ino;
+						rsbac_attribute = A_nlink;
+						rsbac_attribute_value.nlink = filp->f_dentry->d_inode->i_nlink;
+					} else {
+						rsbac_target = T_UNIXSOCK;
+						rsbac_target_id.unixsock.device = filp->f_dentry->d_sb->s_dev;
+						rsbac_target_id.unixsock.inode  = filp->f_dentry->d_inode->i_ino;
+						rsbac_target_id.unixsock.dentry_p = filp->f_dentry;
+						rsbac_attribute = A_f_mode;
+						rsbac_attribute_value.f_mode = filp->f_mode;
+					}
+				} else {
+					rsbac_target = T_NETOBJ;
+					rsbac_target_id.netobj.sock_p
+						= SOCKET_I(filp->f_dentry->d_inode);
+					rsbac_target_id.netobj.local_addr = NULL;
+					rsbac_target_id.netobj.local_len = 0;
+					rsbac_target_id.netobj.remote_addr = NULL;
+					rsbac_target_id.netobj.remote_len = 0;
+					rsbac_attribute = A_f_mode;
+					rsbac_attribute_value.f_mode = filp->f_mode;
+				}
+			} else { /* must be file, fifo or dir */
+				if (S_ISDIR(filp->f_dentry->d_inode->i_mode))
+					rsbac_target = T_DIR;
+				else if (S_ISFIFO(filp->f_dentry->d_inode->i_mode))
+					rsbac_target = T_FIFO;
+				else
+					rsbac_target = T_FILE;
+				rsbac_target_id.file.device = filp->f_dentry->d_inode->i_sb->s_dev;
+				rsbac_target_id.file.inode  = filp->f_dentry->d_inode->i_ino;
+				rsbac_target_id.file.dentry_p = filp->f_dentry;
+				rsbac_attribute = A_f_mode;
+				rsbac_attribute_value.f_mode = filp->f_mode;
+			}
+		if ((rsbac_target != T_NONE) && !rsbac_adf_request(R_CLOSE,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))
+		{
+#ifdef CONFIG_RSBAC_ENFORCE_CLOSE
+			return -EPERM;
+#endif
+		}
+	}
+#endif
 
 	if (filp->f_op && filp->f_op->flush)
 		retval = filp->f_op->flush(filp, id);
@@ -1019,6 +1372,26 @@ int filp_close(struct file *filp, fl_owner_t id)
 		dnotify_flush(filp, id);
 		locks_remove_posix(filp, id);
 	}
+
+#ifdef CONFIG_RSBAC
+	if (rsbac_target != T_NONE) {
+		rsbac_pr_debug(aef, "[sys_close]: notifying ADF\n");
+		rsbac_new_target_id.dummy = 0;
+		rsbac_attribute_value.f_mode = filp->f_mode;
+		if (unlikely(rsbac_adf_set_attr(R_CLOSE,
+					task_pid(current),
+					rsbac_target,
+					rsbac_target_id,
+					T_NONE,
+					rsbac_new_target_id,
+					rsbac_attribute,
+					rsbac_attribute_value))) {
+			rsbac_printk(KERN_WARNING
+					"filp_close() [sys_close]: rsbac_adf_set_attr() returned error\n");
+		}
+	}
+#endif
+
 	security_file_close(filp);
 	fput(filp);
 	return retval;
