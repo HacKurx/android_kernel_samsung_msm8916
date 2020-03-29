@@ -52,7 +52,7 @@ config RSBAC_INIT_THREAD
 
 config RSBAC_MAX_INIT_TIME
 	int 'Initialization timeout in seconds'
-	default 60
+	default 3
 	depends on RSBAC_INIT_THREAD=y
 	---help---
 	  Maximum time in seconds the init process waits for rsbac_initd to
@@ -2369,6 +2369,7 @@ config RSBAC_USER_MOD_IOPERM
 
 config RSBAC_FAKE_ROOT_UID
 	bool 'Faked root uid'
+	default y
 	---help---
 	  With this turned on, programs can optionally get uid 0 returned from
 	  every getuid() and/or geteuid() call.
