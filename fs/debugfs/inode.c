@@ -424,7 +424,11 @@ EXPORT_SYMBOL_GPL(debugfs_create_file);
  */
 struct dentry *debugfs_create_dir(const char *name, struct dentry *parent)
 {
+#ifdef CONFIG_GRKERNSEC_SYSFS_RESTRICT
+	return __create_file(name, S_IFDIR | S_IRWXU,
+#else
 	return __create_file(name, S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO,
+#endif
 				   parent, NULL, NULL);
 }
 EXPORT_SYMBOL_GPL(debugfs_create_dir);
@@ -545,7 +549,7 @@ void debugfs_remove_recursive(struct dentry *dentry)
 	parent = dentry;
  down:
 	mutex_lock(&parent->d_inode->i_mutex);
-	list_for_each_entry_safe(child, next, &parent->d_subdirs, d_child) {
+	list_for_each_entry_safe(child, next, &parent->d_subdirs, d_u.d_child) {
 		if (!debugfs_positive(child))
 			continue;
 
@@ -566,8 +570,8 @@ void debugfs_remove_recursive(struct dentry *dentry)
 	mutex_lock(&parent->d_inode->i_mutex);
 
 	if (child != dentry) {
-		next = list_entry(child->d_child.next, struct dentry,
-					d_child);
+		next = list_entry(child->d_u.d_child.next, struct dentry,
+					d_u.d_child);
 		goto up;
 	}
 

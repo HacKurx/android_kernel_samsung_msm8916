@@ -882,7 +882,7 @@ ip_vs_tunnel_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	iph->daddr		=	cp->daddr.ip;
 	iph->saddr		=	saddr;
 	iph->ttl		=	old_iph->ttl;
-	ip_select_ident(skb, NULL);
+	ip_select_ident(skb, &rt->dst, NULL);
 
 	/* Another hack: avoid icmp_send in ip_fragment */
 	skb->local_df = 1;
@@ -1101,7 +1101,7 @@ ip_vs_icmp_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 		else
 			rc = NF_ACCEPT;
 		/* do not touch skb anymore */
-		atomic_inc(&cp->in_pkts);
+		atomic_inc_unchecked(&cp->in_pkts);
 		goto out;
 	}
 
@@ -1193,7 +1193,7 @@ ip_vs_icmp_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		else
 			rc = NF_ACCEPT;
 		/* do not touch skb anymore */
-		atomic_inc(&cp->in_pkts);
+		atomic_inc_unchecked(&cp->in_pkts);
 		goto out;
 	}
 

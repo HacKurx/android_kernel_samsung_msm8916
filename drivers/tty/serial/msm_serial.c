@@ -991,12 +991,18 @@ static struct uart_driver msm_uart_driver = {
 	.cons = MSM_CONSOLE,
 };
 
+static atomic_unchecked_t msm_uart_next_id = ATOMIC_INIT(0);
+
 static int __init msm_serial_probe(struct platform_device *pdev)
 {
 	struct msm_port *msm_port;
 	struct resource *resource;
 	struct uart_port *port;
 	int irq;
+
+	if (pdev->id == -1)
+		pdev->id = atomic_inc_return_unchecked(&msm_uart_next_id) - 1;
+
 	struct msm_serial_platform_data *pdata = pdev->dev.platform_data;
 
 	if (unlikely(pdev->id < 0 || pdev->id >= UART_NR))

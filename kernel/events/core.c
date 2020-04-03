@@ -168,12 +168,12 @@ static struct srcu_struct pmus_srcu;
  *   2 - disallow kernel profiling for unpriv
  *   3 - disallow all unpriv perf event use
  */
-#ifdef CONFIG_PERF_EVENTS_USERMODE
-int sysctl_perf_event_paranoid __read_mostly = -1;
-#elif defined CONFIG_SECURITY_PERF_EVENTS_RESTRICT
-int sysctl_perf_event_paranoid __read_mostly = 3;
+#ifdef CONFIG_GRKERNSEC_PERF_HARDEN
+int sysctl_perf_event_legitimately_concerned __read_mostly = 3;
+#elif defined(CONFIG_GRKERNSEC_HIDESYM)
+int sysctl_perf_event_legitimately_concerned __read_mostly = 2;
 #else
-int sysctl_perf_event_paranoid __read_mostly = 1;
+int sysctl_perf_event_legitimately_concerned __read_mostly = 1;
 #endif
 
 /* Minimum for 512 kiB + 1 user control page */
@@ -285,7 +285,7 @@ void perf_sample_event_took(u64 sample_len_ns)
 	update_perf_cpu_limits();
 }
 
-static atomic64_t perf_event_id;
+static atomic64_unchecked_t perf_event_id;
 
 static void cpu_ctx_sched_out(struct perf_cpu_context *cpuctx,
 			      enum event_type_t event_type);
@@ -3031,7 +3031,7 @@ static void __perf_event_read(void *info)
 
 static inline u64 perf_event_count(struct perf_event *event)
 {
-	return local64_read(&event->count) + atomic64_read(&event->child_count);
+	return local64_read(&event->count) + atomic64_read_unchecked(&event->child_count);
 }
 
 static u64 perf_event_read(struct perf_event *event)
@@ -3117,7 +3117,7 @@ find_lively_task_by_vpid(pid_t vpid)
 
 	/* Reuse ptrace permission checks for now. */
 	err = -EACCES;
-	if (!ptrace_may_access(task, PTRACE_MODE_READ_REALCREDS))
+	if (!ptrace_may_access(task, PTRACE_MODE_READ))
 		goto errout;
 
 	return task;
@@ -3440,9 +3440,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
 	mutex_lock(&event->child_mutex);
 	total += perf_event_read(event);
 	*enabled += event->total_time_enabled +
-			atomic64_read(&event->child_total_time_enabled);
+			atomic64_read_unchecked(&event->child_total_time_enabled);
 	*running += event->total_time_running +
-			atomic64_read(&event->child_total_time_running);
+			atomic64_read_unchecked(&event->child_total_time_running);
 
 	list_for_each_entry(child, &event->child_list, child_list) {
 		total += perf_event_read(child);
@@ -3873,10 +3873,10 @@ void perf_event_update_userpage(struct perf_event *event)
 		userpg->offset -= local64_read(&event->hw.prev_count);
 
 	userpg->time_enabled = enabled +
-			atomic64_read(&event->child_total_time_enabled);
+			atomic64_read_unchecked(&event->child_total_time_enabled);
 
 	userpg->time_running = running +
-			atomic64_read(&event->child_total_time_running);
+			atomic64_read_unchecked(&event->child_total_time_running);
 
 	arch_perf_update_userpage(userpg, now);
 
@@ -4444,7 +4444,7 @@ perf_output_sample_ustack(struct perf_output_handle *handle, u64 dump_size,
 
 		/* Data. */
 		sp = perf_user_stack_pointer(regs);
-		rem = __output_copy_user(handle, (void *) sp, dump_size);
+		rem = __output_copy_user(handle, (void __user *) sp, dump_size);
 		dyn_size = dump_size - rem;
 
 		perf_output_skip(handle, rem);
@@ -4532,11 +4532,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
 	values[n++] = perf_event_count(event);
 	if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED) {
 		values[n++] = enabled +
-			atomic64_read(&event->child_total_time_enabled);
+			atomic64_read_unchecked(&event->child_total_time_enabled);
 	}
 	if (read_format & PERF_FORMAT_TOTAL_TIME_RUNNING) {
 		values[n++] = running +
-			atomic64_read(&event->child_total_time_running);
+			atomic64_read_unchecked(&event->child_total_time_running);
 	}
 	if (read_format & PERF_FORMAT_ID)
 		values[n++] = primary_event_id(event);
@@ -5245,12 +5245,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
 		 * need to add enough zero bytes after the string to handle
 		 * the 64bit alignment we do later.
 		 */
-		buf = kzalloc(PATH_MAX + sizeof(u64), GFP_KERNEL);
+		buf = kzalloc(PATH_MAX, GFP_KERNEL);
 		if (!buf) {
 			name = strncpy(tmp, "//enomem", sizeof(tmp));
 			goto got_name;
 		}
-		name = d_path(&file->f_path, buf, PATH_MAX);
+		name = d_path(&file->f_path, buf, PATH_MAX - sizeof(u64));
 		if (IS_ERR(name)) {
 			name = strncpy(tmp, "//toolong", sizeof(tmp));
 			goto got_name;
@@ -6675,7 +6675,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 	event->parent		= parent_event;
 
 	event->ns		= get_pid_ns(task_active_pid_ns(current));
-	event->id		= atomic64_inc_return(&perf_event_id);
+	event->id		= atomic64_inc_return_unchecked(&perf_event_id);
 
 	event->state		= PERF_EVENT_STATE_INACTIVE;
 
@@ -6996,6 +6996,11 @@ SYSCALL_DEFINE5(perf_event_open,
 
 	if (perf_paranoid_any() && !capable(CAP_SYS_ADMIN))
 		return -EACCES;
+
+#ifdef CONFIG_GRKERNSEC_PERF_HARDEN
+	if (perf_paranoid_any() && !capable(CAP_SYS_ADMIN))
+		return -EACCES;
+#endif
 
 	err = perf_copy_attr(attr_uptr, &attr);
 	if (err)
@@ -7381,10 +7386,10 @@ static void sync_child_event(struct perf_event *child_event,
 	/*
 	 * Add back the child's count to the parent's count:
 	 */
-	atomic64_add(child_val, &parent_event->child_count);
-	atomic64_add(child_event->total_time_enabled,
+	atomic64_add_unchecked(child_val, &parent_event->child_count);
+	atomic64_add_unchecked(child_event->total_time_enabled,
 		     &parent_event->child_total_time_enabled);
-	atomic64_add(child_event->total_time_running,
+	atomic64_add_unchecked(child_event->total_time_running,
 		     &parent_event->child_total_time_running);
 
 	/*

@@ -23,11 +23,16 @@
 #include <linux/slab.h>
 #include <linux/mount.h>
 #include <linux/magic.h>
-#include <linux/namei.h>
+#include <linux/grsecurity.h>
 
 #include <asm/uaccess.h>
 
 #include "internal.h"
+
+#ifdef CONFIG_PROC_SYSCTL
+extern const struct inode_operations proc_sys_inode_operations;
+extern const struct inode_operations proc_sys_dir_operations;
+#endif
 
 static void proc_evict_inode(struct inode *inode)
 {
@@ -56,6 +61,13 @@ static void proc_evict_inode(struct inode *inode)
 	ns = PROC_I(inode)->ns.ns;
 	if (ns_ops && ns)
 		ns_ops->put(ns);
+
+#ifdef CONFIG_PROC_SYSCTL
+	if (inode->i_op == &proc_sys_inode_operations ||
+	    inode->i_op == &proc_sys_dir_operations)
+		gr_handle_delete(inode->i_ino, inode->i_sb->s_dev);
+#endif
+
 }
 
 static struct kmem_cache * proc_inode_cachep;
@@ -374,26 +386,6 @@ static const struct file_operations proc_reg_file_ops_no_compat = {
 };
 #endif
 
-static void *proc_follow_link(struct dentry *dentry, struct nameidata *nd)
-{
-	struct proc_dir_entry *pde = PDE(dentry->d_inode);
-	if (unlikely(!use_pde(pde)))
-		return ERR_PTR(-EINVAL);
-	nd_set_link(nd, pde->data);
-	return pde;
-}
-
-static void proc_put_link(struct dentry *dentry, struct nameidata *nd, void *p)
-{
-	unuse_pde(p);
-}
-
-const struct inode_operations proc_link_inode_operations = {
-	.readlink	= generic_readlink,
-	.follow_link	= proc_follow_link,
-	.put_link	= proc_put_link,
-};
-
 struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 {
 	struct inode *inode = new_inode_pseudo(sb);
@@ -406,7 +398,11 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 		if (de->mode) {
 			inode->i_mode = de->mode;
 			inode->i_uid = de->uid;
+#ifdef CONFIG_GRKERNSEC_PROC_USERGROUP
+			inode->i_gid = grsec_proc_gid;
+#else
 			inode->i_gid = de->gid;
+#endif
 		}
 		if (de->size)
 			inode->i_size = de->size;

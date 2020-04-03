@@ -89,7 +89,6 @@
 #include <linux/rcupdate.h>
 #include <linux/times.h>
 #include <linux/slab.h>
-#include <linux/jhash.h>
 #include <net/dst.h>
 #include <net/net_namespace.h>
 #include <net/protocol.h>
@@ -465,53 +464,39 @@ static struct neighbour *ipv4_neigh_lookup(const struct dst_entry *dst,
 	return neigh_create(&arp_tbl, pkey, dev);
 }
 
-#define IP_IDENTS_SZ 2048u
-struct ip_ident_bucket {
-	atomic_t	id;
-	u32		stamp32;
-};
-
-static struct ip_ident_bucket *ip_idents __read_mostly;
-
-/* In order to protect privacy, we add a perturbation to identifiers
- * if one generator is seldom used. This makes hard for an attacker
- * to infer how many packets were sent between two points in time.
+/*
+ * Peer allocation may fail only in serious out-of-memory conditions.  However
+ * we still can generate some output.
+ * Random ID selection looks a bit dangerous because we have no chances to
+ * select ID being unique in a reasonable period of time.
+ * But broken packet identifier may be better than no packet at all.
  */
-u32 ip_idents_reserve(u32 hash, int segs)
+static void ip_select_fb_ident(struct iphdr *iph)
 {
-	struct ip_ident_bucket *bucket = ip_idents + hash % IP_IDENTS_SZ;
-	u32 old = ACCESS_ONCE(bucket->stamp32);
-	u32 now = (u32)jiffies;
-	u32 delta = 0;
+	static DEFINE_SPINLOCK(ip_fb_id_lock);
+	static u32 ip_fallback_id;
+	u32 salt;
 
-	if (old != now && cmpxchg(&bucket->stamp32, old, now) == old) {
-		u64 x = prandom_u32();
-
-		x *= (now - old);
-		delta = (u32)(x >> 32);
-	}
-
-	return atomic_add_return(segs + delta, &bucket->id) - segs;
+	spin_lock_bh(&ip_fb_id_lock);
+	salt = secure_ip_id((__force __be32)ip_fallback_id ^ iph->daddr);
+	iph->id = htons(salt & 0xFFFF);
+	ip_fallback_id = salt;
+	spin_unlock_bh(&ip_fb_id_lock);
 }
-EXPORT_SYMBOL(ip_idents_reserve);
 
-void __ip_select_ident(struct iphdr *iph, int segs)
+void __ip_select_ident(struct iphdr *iph, struct dst_entry *dst, int more)
 {
-	static u32 ip_idents_hashrnd __read_mostly;
-	static bool hashrnd_initialized = false;
-	u32 hash, id;
+	struct net *net = dev_net(dst->dev);
+	struct inet_peer *peer;
 
-	if (unlikely(!hashrnd_initialized)) {
-		hashrnd_initialized = true;
-		get_random_bytes(&ip_idents_hashrnd, sizeof(ip_idents_hashrnd));
+	peer = inet_getpeer_v4(net->ipv4.peers, iph->daddr, 1);
+	if (peer) {
+		iph->id = htons(inet_getid(peer, more));
+		inet_putpeer(peer);
+		return;
 	}
 
-	hash = jhash_3words((__force u32)iph->daddr,
-			    (__force u32)iph->saddr,
-			    iph->protocol,
-			    ip_idents_hashrnd);
-	id = ip_idents_reserve(hash, segs);
-	iph->id = htons(id);
+	ip_select_fb_ident(iph);
 }
 EXPORT_SYMBOL(__ip_select_ident);
 
@@ -2622,34 +2607,34 @@ static struct ctl_table ipv4_route_flush_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0200,
 		.proc_handler	= ipv4_sysctl_rtcache_flush,
+		.extra1		= &init_net,
 	},
 	{ },
 };
 
 static __net_init int sysctl_route_net_init(struct net *net)
 {
-	struct ctl_table *tbl;
+	ctl_table_no_const *tbl = NULL;
 
-	tbl = ipv4_route_flush_table;
 	if (!net_eq(net, &init_net)) {
-		tbl = kmemdup(tbl, sizeof(ipv4_route_flush_table), GFP_KERNEL);
+		tbl = kmemdup(ipv4_route_flush_table, sizeof(ipv4_route_flush_table), GFP_KERNEL);
 		if (tbl == NULL)
 			goto err_dup;
 
 		/* Don't export sysctls to unprivileged users */
 		if (net->user_ns != &init_user_ns)
 			tbl[0].procname = NULL;
-	}
-	tbl[0].extra1 = net;
+		tbl[0].extra1 = net;
+		net->ipv4.route_hdr = register_net_sysctl(net, "net/ipv4/route", tbl);
+	} else
+		net->ipv4.route_hdr = register_net_sysctl(net, "net/ipv4/route", ipv4_route_flush_table);
 
-	net->ipv4.route_hdr = register_net_sysctl(net, "net/ipv4/route", tbl);
 	if (net->ipv4.route_hdr == NULL)
 		goto err_reg;
 	return 0;
 
 err_reg:
-	if (tbl != ipv4_route_flush_table)
-		kfree(tbl);
+	kfree(tbl);
 err_dup:
 	return -ENOMEM;
 }
@@ -2672,7 +2657,7 @@ static __net_initdata struct pernet_operations sysctl_route_ops = {
 
 static __net_init int rt_genid_init(struct net *net)
 {
-	atomic_set(&net->rt_genid, 0);
+	atomic_set_unchecked(&net->rt_genid, 0);
 	get_random_bytes(&net->ipv4.dev_addr_genid,
 			 sizeof(net->ipv4.dev_addr_genid));
 	return 0;
@@ -2714,12 +2699,6 @@ struct ip_rt_acct __percpu *ip_rt_acct __read_mostly;
 int __init ip_rt_init(void)
 {
 	int rc = 0;
-
-	ip_idents = kmalloc(IP_IDENTS_SZ * sizeof(*ip_idents), GFP_KERNEL);
-	if (!ip_idents)
-		panic("IP: failed to allocate ip_idents\n");
-
-	prandom_bytes(ip_idents, IP_IDENTS_SZ * sizeof(*ip_idents));
 
 #ifdef CONFIG_IP_ROUTE_CLASSID
 	ip_rt_acct = __alloc_percpu(256 * sizeof(struct ip_rt_acct), __alignof__(struct ip_rt_acct));

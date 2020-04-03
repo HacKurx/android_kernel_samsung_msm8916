@@ -18,6 +18,7 @@
 #include <linux/raw.h>
 #include <linux/tty.h>
 #include <linux/capability.h>
+#include <linux/security.h>
 #include <linux/ptrace.h>
 #include <linux/device.h>
 #include <linux/highmem.h>
@@ -37,6 +38,10 @@
 #endif
 
 #define DEVPORT_MINOR	4
+
+#if defined(CONFIG_GRKERNSEC) && !defined(CONFIG_GRKERNSEC_NO_RBAC)
+extern const struct file_operations grsec_fops;
+#endif
 
 static inline unsigned long size_inside_page(unsigned long start,
 					     unsigned long size)
@@ -62,10 +67,6 @@ static inline int valid_mmap_phys_addr_range(unsigned long pfn, size_t size)
 
 #if defined(CONFIG_DEVMEM) || defined(CONFIG_DEVKMEM)
 #ifdef CONFIG_STRICT_DEVMEM
-static inline int page_is_allowed(unsigned long pfn)
-{
-	return devmem_is_allowed(pfn);
-}
 static inline int range_is_allowed(unsigned long pfn, unsigned long size)
 {
 	u64 from = ((u64)pfn) << PAGE_SHIFT;
@@ -73,18 +74,27 @@ static inline int range_is_allowed(unsigned long pfn, unsigned long size)
 	u64 cursor = from;
 
 	while (cursor < to) {
-		if (!devmem_is_allowed(pfn))
+		if (!devmem_is_allowed(pfn)) {
+#ifdef CONFIG_GRKERNSEC_KMEM
+			gr_handle_mem_readwrite(from, to);
+#else
+			printk(KERN_INFO
+		"Program %s tried to access /dev/mem between %Lx->%Lx.\n",
+				current->comm, from, to);
+#endif
 			return 0;
+		}
 		cursor += PAGE_SIZE;
 		pfn++;
 	}
 	return 1;
 }
-#else
-static inline int page_is_allowed(unsigned long pfn)
+#elif defined(CONFIG_GRKERNSEC_KMEM)
+static inline int range_is_allowed(unsigned long pfn, unsigned long size)
 {
-	return 1;
+	return 0;
 }
+#else
 static inline int range_is_allowed(unsigned long pfn, unsigned long size)
 {
 	return 1;
@@ -128,31 +138,40 @@ static ssize_t read_mem(struct file *file, char __user *buf,
 
 	while (count > 0) {
 		unsigned long remaining;
-		int allowed;
+		char *temp;
 
 		sz = size_inside_page(p, count);
 
-		allowed = page_is_allowed(p >> PAGE_SHIFT);
-		if (!allowed)
+		if (!range_is_allowed(p >> PAGE_SHIFT, count))
 			return -EPERM;
-		if (allowed == 2) {
-			/* Show zeros for restricted memory. */
-			remaining = clear_user(buf, sz);
-		} else {
-			/*
-			 * On ia64 if a page has been mapped somewhere as
-			 * uncached, then it must also be accessed uncached
-			 * by the kernel or data corruption may occur.
-			 */
-			ptr = xlate_dev_mem_ptr(p);
-			if (!ptr)
-				return -EFAULT;
 
-			remaining = copy_to_user(buf, ptr, sz);
+		/*
+		 * On ia64 if a page has been mapped somewhere as uncached, then
+		 * it must also be accessed uncached by the kernel or data
+		 * corruption may occur.
+		 */
+		ptr = xlate_dev_mem_ptr(p);
+		if (!ptr)
+			return -EFAULT;
 
+#ifdef CONFIG_PAX_USERCOPY
+		temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
+		if (!temp) {
 			unxlate_dev_mem_ptr(p, ptr);
+			return -ENOMEM;
 		}
+		memcpy(temp, ptr, sz);
+#else
+		temp = ptr;
+#endif
 
+		remaining = copy_to_user(buf, temp, sz);
+
+#ifdef CONFIG_PAX_USERCOPY
+		kfree(temp);
+#endif
+
+		unxlate_dev_mem_ptr(p, ptr);
 		if (remaining)
 			return -EFAULT;
 
@@ -192,36 +211,30 @@ static ssize_t write_mem(struct file *file, const char __user *buf,
 #endif
 
 	while (count > 0) {
-		int allowed;
-
 		sz = size_inside_page(p, count);
 
-		allowed = page_is_allowed(p >> PAGE_SHIFT);
-		if (!allowed)
+		if (!range_is_allowed(p >> PAGE_SHIFT, sz))
 			return -EPERM;
 
-		/* Skip actual writing when a page is marked as restricted. */
-		if (allowed == 1) {
-			/*
-			 * On ia64 if a page has been mapped somewhere as
-			 * uncached, then it must also be accessed uncached
-			 * by the kernel or data corruption may occur.
-			 */
-			ptr = xlate_dev_mem_ptr(p);
-			if (!ptr) {
-				if (written)
-					break;
-				return -EFAULT;
-			}
+		/*
+		 * On ia64 if a page has been mapped somewhere as uncached, then
+		 * it must also be accessed uncached by the kernel or data
+		 * corruption may occur.
+		 */
+		ptr = xlate_dev_mem_ptr(p);
+		if (!ptr) {
+			if (written)
+				break;
+			return -EFAULT;
+		}
 
-			copied = copy_from_user(ptr, buf, sz);
-			unxlate_dev_mem_ptr(p, ptr);
-			if (copied) {
-				written += sz - copied;
-				if (written)
-					break;
-				return -EFAULT;
-			}
+		copied = copy_from_user(ptr, buf, sz);
+		unxlate_dev_mem_ptr(p, ptr);
+		if (copied) {
+			written += sz - copied;
+			if (written)
+				break;
+			return -EFAULT;
 		}
 
 		buf += sz;
@@ -404,7 +417,7 @@ static ssize_t read_oldmem(struct file *file, char __user *buf,
 		else
 			csize = count;
 
-		rc = copy_oldmem_page(pfn, buf, csize, offset, 1);
+		rc = copy_oldmem_page(pfn, (char __force_kernel *)buf, csize, offset, 1);
 		if (rc < 0)
 			return rc;
 		buf += csize;
@@ -424,9 +437,8 @@ static ssize_t read_kmem(struct file *file, char __user *buf,
 			 size_t count, loff_t *ppos)
 {
 	unsigned long p = *ppos;
-	ssize_t low_count, read, sz;
+	ssize_t low_count, read, sz, err = 0;
 	char *kbuf; /* k-addr because vread() takes vmlist_lock rwlock */
-	int err = 0;
 
 	read = 0;
 	if (p < (unsigned long) high_memory) {
@@ -448,6 +460,8 @@ static ssize_t read_kmem(struct file *file, char __user *buf,
 		}
 #endif
 		while (low_count > 0) {
+			char *temp;
+
 			sz = size_inside_page(p, low_count);
 
 			/*
@@ -457,7 +471,22 @@ static ssize_t read_kmem(struct file *file, char __user *buf,
 			 */
 			kbuf = xlate_dev_kmem_ptr((char *)p);
 
-			if (copy_to_user(buf, kbuf, sz))
+#ifdef CONFIG_PAX_USERCOPY
+			temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
+			if (!temp)
+				return -ENOMEM;
+			memcpy(temp, kbuf, sz);
+#else
+			temp = kbuf;
+#endif
+
+			err = copy_to_user(buf, temp, sz);
+
+#ifdef CONFIG_PAX_USERCOPY
+			kfree(temp);
+#endif
+
+			if (err)
 				return -EFAULT;
 			buf += sz;
 			p += sz;
@@ -904,6 +933,9 @@ static const struct memdev {
 #ifdef CONFIG_CRASH_DUMP
 	[12] = { "oldmem", 0, &oldmem_fops, NULL },
 #endif
+#if defined(CONFIG_GRKERNSEC) && !defined(CONFIG_GRKERNSEC_NO_RBAC)
+	[13] = { "grsec",S_IRUSR | S_IWUGO, &grsec_fops, NULL },
+#endif
 };
 
 static int memory_open(struct inode *inode, struct file *filp)
@@ -975,7 +1007,7 @@ static int __init chr_dev_init(void)
 			continue;
 
 		device_create(mem_class, NULL, MKDEV(MEM_MAJOR, minor),
-			      NULL, devlist[minor].name);
+			      NULL, "%s", devlist[minor].name);
 	}
 
 	return tty_init();

@@ -428,7 +428,7 @@ int __bitmap_parse(const char *buf, unsigned int buflen,
 {
 	int c, old_c, totaldigits, ndigits, nchunks, nbits;
 	u32 chunk;
-	const char __user __force *ubuf = (const char __user __force *)buf;
+	const char __user *ubuf = (const char __force_user *)buf;
 
 	bitmap_zero(maskp, nmaskbits);
 
@@ -513,7 +513,7 @@ int bitmap_parse_user(const char __user *ubuf,
 {
 	if (!access_ok(VERIFY_READ, ubuf, ulen))
 		return -EFAULT;
-	return __bitmap_parse((const char __force *)ubuf,
+	return __bitmap_parse((const char __force_kernel *)ubuf,
 				ulen, 1, maskp, nmaskbits);
 
 }
@@ -604,13 +604,13 @@ static int __bitmap_parselist(const char *buf, unsigned int buflen,
 {
 	unsigned a, b;
 	int c, old_c, totaldigits;
-	const char __user __force *ubuf = (const char __user __force *)buf;
-	int at_start, in_range;
+	const char __user *ubuf = (const char __force_user *)buf;
+	int exp_digit, in_range;
 
 	totaldigits = c = 0;
 	bitmap_zero(maskp, nmaskbits);
 	do {
-		at_start = 1;
+		exp_digit = 1;
 		in_range = 0;
 		a = b = 0;
 
@@ -639,10 +639,11 @@ static int __bitmap_parselist(const char *buf, unsigned int buflen,
 				break;
 
 			if (c == '-') {
-				if (at_start || in_range)
+				if (exp_digit || in_range)
 					return -EINVAL;
 				b = 0;
 				in_range = 1;
+				exp_digit = 1;
 				continue;
 			}
 
@@ -652,18 +653,16 @@ static int __bitmap_parselist(const char *buf, unsigned int buflen,
 			b = b * 10 + (c - '0');
 			if (!in_range)
 				a = b;
-			at_start = 0;
+			exp_digit = 0;
 			totaldigits++;
 		}
 		if (!(a <= b))
 			return -EINVAL;
 		if (b >= nmaskbits)
 			return -ERANGE;
-		if (!at_start) {
-			while (a <= b) {
-				set_bit(a, maskp);
-				a++;
-			}
+		while (a <= b) {
+			set_bit(a, maskp);
+			a++;
 		}
 	} while (buflen && c == ',');
 	return 0;
@@ -705,7 +704,7 @@ int bitmap_parselist_user(const char __user *ubuf,
 {
 	if (!access_ok(VERIFY_READ, ubuf, ulen))
 		return -EFAULT;
-	return __bitmap_parselist((const char __force *)ubuf,
+	return __bitmap_parselist((const char __force_kernel *)ubuf,
 					ulen, 1, maskp, nmaskbits);
 }
 EXPORT_SYMBOL(bitmap_parselist_user);

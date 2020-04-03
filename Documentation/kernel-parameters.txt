@@ -984,6 +984,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Format: <unsigned int> such that (rxsize & ~0x1fffc0) == 0.
 			Default: 1024
 
+	grsec_proc_gid= [GRKERNSEC_PROC_USERGROUP] Chooses GID to
+			ignore grsecurity's /proc restrictions
+
+
 	hashdist=	[KNL,NUMA] Large hashes allocated during boot
 			are distributed across NUMA nodes.  Defaults on
 			for 64-bit NUMA, off otherwise.
@@ -1941,6 +1945,10 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			noexec=on: enable non-executable mappings (default)
 			noexec=off: disable non-executable mappings
 
+	nopcid		[X86-64]
+			Disable PCID (Process-Context IDentifier) even if it
+			is supported by the processor.
+
 	nosmap		[X86]
 			Disable SMAP (Supervisor Mode Access Prevention)
 			even if it is supported by processor.
@@ -2207,6 +2215,25 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 			Halt all CPUs after the first oops has been printed for
 			the specified number of seconds.  This is to be used if
 			your oopses keep scrolling off the screen.
+
+	pax_nouderef	[X86] disables UDEREF.  Most likely needed under certain
+			virtualization environments that don't cope well with the
+			expand down segment used by UDEREF on X86-32 or the frequent
+			page table updates on X86-64.
+
+	pax_sanitize_slab=
+			0/1 to disable/enable slab object sanitization (enabled by
+			default).
+
+	pax_softmode=	0/1 to disable/enable PaX softmode on boot already.
+
+	pax_extra_latent_entropy
+			Enable a very simple form of latent entropy extraction
+			from the first 4GB of memory as the bootmem allocator
+			passes the memory pages to the buddy allocator.
+
+	pax_weakuderef	[X86-64] enables the weaker but faster form of UDEREF
+			when the processor supports PCID.
 
 	pcbit=		[HW,ISDN]
 
@@ -2915,13 +2942,6 @@ bytes respectively. Such letter suffixes can also be entirely omitted.
 	spia_fio_base=
 	spia_pedr=
 	spia_peddr=
-
-	stack_guard_gap=	[MM]
-			override the default stack gap protection. The value
-			is in page units and it defines how many pages prior
-			to (for stacks growing down) resp. after (for stacks
-			growing up) the main stack are reserved for no other
-			mapping. Default value is 256 pages.
 
 	stacktrace	[FTRACE]
 			Enabled the stack tracer on boot up.

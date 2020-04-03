@@ -11,6 +11,7 @@
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/cred.h>
+#include <linux/sched.h>
 #include <linux/mm.h>
 
 #include <asm/uaccess.h>
@@ -74,6 +75,9 @@ int seq_open(struct file *file, const struct seq_operations *op)
 #ifdef CONFIG_USER_NS
 	p->user_ns = file->f_cred->user_ns;
 #endif
+#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
+	p->exec_id = current->exec_id;
+#endif
 
 	/*
 	 * Wrappers around seq_open(e.g. swaps_open) need to be
@@ -110,7 +114,7 @@ static int traverse(struct seq_file *m, loff_t offset)
 		return 0;
 	}
 	if (!m->buf) {
-		m->buf = seq_buf_alloc(m->size = PAGE_SIZE);
+		m->buf = kmalloc(m->size = PAGE_SIZE, GFP_KERNEL | GFP_USERCOPY);
 		if (!m->buf)
 			return -ENOMEM;
 	}
@@ -149,9 +153,8 @@ static int traverse(struct seq_file *m, loff_t offset)
 
 Eoverflow:
 	m->op->stop(m, p);
-	kvfree(m->buf);
-	m->count = 0;
-	m->buf = seq_buf_alloc(m->size <<= 1);
+	kfree(m->buf);
+	m->buf = kmalloc(m->size <<= 1, GFP_KERNEL | GFP_USERCOPY);
 	return !m->buf ? -ENOMEM : -EAGAIN;
 }
 
@@ -206,7 +209,7 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
 
 	/* grab buffer if we didn't have one */
 	if (!m->buf) {
-		m->buf = seq_buf_alloc(m->size = PAGE_SIZE);
+		m->buf = kmalloc(m->size = PAGE_SIZE, GFP_KERNEL | GFP_USERCOPY);
 		if (!m->buf)
 			goto Enomem;
 	}
@@ -248,11 +251,11 @@ ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
 		if (m->count < m->size)
 			goto Fill;
 		m->op->stop(m, p);
-		kvfree(m->buf);
-		m->count = 0;
-		m->buf = seq_buf_alloc(m->size <<= 1);
+		kfree(m->buf);
+		m->buf = kmalloc(m->size <<= 1, GFP_KERNEL | GFP_USERCOPY);
 		if (!m->buf)
 			goto Enomem;
+		m->count = 0;
 		m->version = 0;
 		pos = m->index;
 		p = m->op->start(m, &pos);
@@ -600,7 +603,7 @@ static void single_stop(struct seq_file *p, void *v)
 int single_open(struct file *file, int (*show)(struct seq_file *, void *),
 		void *data)
 {
-	struct seq_operations *op = kmalloc(sizeof(*op), GFP_KERNEL);
+	seq_operations_no_const *op = kzalloc(sizeof(*op), GFP_KERNEL);
 	int res = -ENOMEM;
 
 	if (op) {

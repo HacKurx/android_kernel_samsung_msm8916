@@ -916,7 +916,7 @@ typedef struct drm_i915_private {
 	drm_dma_handle_t *status_page_dmah;
 	struct resource mch_res;
 
-	atomic_t irq_received;
+	atomic_unchecked_t irq_received;
 
 	/* protects the irq masks */
 	spinlock_t irq_lock;
@@ -1804,7 +1804,7 @@ void i915_teardown_sysfs(struct drm_device *dev_priv);
 /* intel_i2c.c */
 extern int intel_setup_gmbus(struct drm_device *dev);
 extern void intel_teardown_gmbus(struct drm_device *dev);
-static inline bool intel_gmbus_is_port_valid(unsigned port)
+extern inline bool intel_gmbus_is_port_valid(unsigned port)
 {
 	return (port >= GMBUS_PORT_SSC && port <= GMBUS_PORT_DPD);
 }

@@ -10,17 +10,45 @@
 
 #include <asm/unistd.h>
 #include <asm/ftrace.h>
+#include <asm/domain.h>
 #include <asm/unwind.h>
+
+#include "entry-header.S"
 
 #ifdef CONFIG_NEED_RET_TO_USER
 #include <mach/entry-macro.S>
 #else
 	.macro  arch_ret_to_user, tmp1, tmp2
+#if defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
+	@ save regs
+	stmdb	sp!, {r1, r2}
+        @ read DACR from cpu_domain into r1
+        mov     r2, sp
+        @ assume 8K pages, since we have to split the immediate in two
+        bic     r2, r2, #(0x1fc0)
+        bic     r2, r2, #(0x3f)
+        ldr     r1, [r2, #TI_CPU_DOMAIN]
+#ifdef CONFIG_PAX_KERNEXEC
+        @ set type of DOMAIN_KERNEL to DOMAIN_KERNELCLIENT
+        bic     r1, r1, #(domain_val(DOMAIN_KERNEL, 3))
+        orr     r1, r1, #(domain_val(DOMAIN_KERNEL, DOMAIN_KERNELCLIENT))
+#endif
+#ifdef CONFIG_PAX_MEMORY_UDEREF
+        @ set current DOMAIN_USER to DOMAIN_UDEREF
+        bic     r1, r1, #(domain_val(DOMAIN_USER, 3))
+        orr     r1, r1, #(domain_val(DOMAIN_USER, DOMAIN_UDEREF))
+#endif
+        @ write r1 to current_thread_info()->cpu_domain
+        str     r1, [r2, #TI_CPU_DOMAIN]
+        @ write r1 to DACR
+        mcr     p15, 0, r1, c3, c0, 0
+        @ instruction sync
+        instr_sync
+	@ restore regs
+	ldmia	sp!, {r1, r2}
+#endif
 	.endm
 #endif
-
-#include "entry-header.S"
-
 
 	.align	5
 /*
@@ -352,6 +380,7 @@ ENDPROC(ftrace_stub)
 
 	.align	5
 ENTRY(vector_swi)
+
 	sub	sp, sp, #S_FRAME_SIZE
 	stmia	sp, {r0 - r12}			@ Calling r0 - r12
  ARM(	add	r8, sp, #S_PC		)
@@ -363,16 +392,6 @@ ENTRY(vector_swi)
 	str	r8, [sp, #S_PSR]		@ Save CPSR
 	str	r0, [sp, #S_OLD_R0]		@ Save OLD_R0
 	zero_fp
-
-#ifdef CONFIG_ALIGNMENT_TRAP
-	ldr	ip, __cr_alignment
-	ldr	ip, [ip]
-	mcr	p15, 0, ip, c1, c0		@ update control register
-#endif
-
-	enable_irq
-	ct_user_exit
-	get_thread_info tsk
 
 	/*
 	 * Get the system call number.
@@ -387,9 +406,9 @@ ENTRY(vector_swi)
 #ifdef CONFIG_ARM_THUMB
 	tst	r8, #PSR_T_BIT
 	movne	r10, #0				@ no thumb OABI emulation
- USER(	ldreq	r10, [lr, #-4]		)	@ get SWI instruction
+	ldreq	r10, [lr, #-4]			@ get SWI instruction
 #else
- USER(	ldr	r10, [lr, #-4]		)	@ get SWI instruction
+	ldr	r10, [lr, #-4]			@ get SWI instruction
 #endif
 #ifdef CONFIG_CPU_ENDIAN_BE8
 	rev	r10, r10			@ little endian instruction
@@ -404,13 +423,28 @@ ENTRY(vector_swi)
 	/* Legacy ABI only, possibly thumb mode. */
 	tst	r8, #PSR_T_BIT			@ this is SPSR from save_user_regs
 	addne	scno, r7, #__NR_SYSCALL_BASE	@ put OS number in
- USER(	ldreq	scno, [lr, #-4]		)
+	ldreq	scno, [lr, #-4]
 
 #else
 	/* Legacy ABI only. */
- USER(	ldr	scno, [lr, #-4]		)	@ get SWI instruction
+	ldr	scno, [lr, #-4]			@ get SWI instruction
 #endif
 
+	/*
+	 * do this here to avoid a performance hit of wrapping the code above
+	 * that directly dereferences userland to parse the SWI instruction
+	 */
+	pax_enter_kernel_user
+
+#ifdef CONFIG_ALIGNMENT_TRAP
+	ldr	ip, __cr_alignment
+	ldr	ip, [ip]
+	mcr	p15, 0, ip, c1, c0		@ update control register
+#endif
+	enable_irq
+	ct_user_exit
+
+	get_thread_info tsk
 	adr	tbl, sys_call_table		@ load syscall table pointer
 
 #if defined(CONFIG_OABI_COMPAT)
@@ -445,21 +479,6 @@ local_restart:
 	eor	r0, scno, #__NR_SYSCALL_BASE	@ put OS number back
 	bcs	arm_syscall	
 	b	sys_ni_syscall			@ not private func
-
-#if defined(CONFIG_OABI_COMPAT) || !defined(CONFIG_AEABI)
-	/*
-	 * We failed to handle a fault trying to access the page
-	 * containing the swi instruction, but we're not really in a
-	 * position to return -EFAULT. Instead, return back to the
-	 * instruction and re-enter the user fault handling path trying
-	 * to page it in. This will likely result in sending SEGV to the
-	 * current task.
-	 */
-9001:
-	sub	lr, lr, #4
-	str	lr, [sp, #S_PC]
-	b	ret_fast_syscall
-#endif
 ENDPROC(vector_swi)
 
 	/*
