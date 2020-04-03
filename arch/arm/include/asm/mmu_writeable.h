@@ -26,6 +26,4 @@ static inline void mem_text_address_restore(void) {};
 static inline void mem_text_writeable_spinunlock(unsigned long *flags) {};
 #endif
 
-void mem_text_write_kernel_word(unsigned long *addr, unsigned long word);
-
 #endif
