@@ -1422,9 +1422,6 @@ SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
 	if (retval < 0)
 		goto out;
 
-	if (retval == 0)
-		sockev_notify(SOCKEV_SOCKET, sock);
-
 	retval = sock_map_fd(sock, flags & (O_CLOEXEC | O_NONBLOCK));
 	if (retval < 0)
 		goto out_release;
@@ -1715,8 +1712,9 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
 
 	fd_install(newfd, newfile);
 	err = newfd;
-	if (!err)
-		sockev_notify(SOCKEV_ACCEPT, sock);
+
+	gr_attach_curr_ip(newsock->sk);
+
 out_put:
 	fput_light(sock->file, fput_needed);
 out:
@@ -1749,6 +1747,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
 		int, addrlen)
 {
 	struct socket *sock;
+	struct sockaddr *sck;
 	struct sockaddr_storage address;
 	int err, fput_needed;
 
@@ -1794,7 +1793,7 @@ SYSCALL_DEFINE3(getsockname, int, fd, struct sockaddr __user *, usockaddr,
 		int __user *, usockaddr_len)
 {
 	struct socket *sock;
-	struct sockaddr_storage address;
+	struct sockaddr_storage address = { };
 	int len, err, fput_needed;
 
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
@@ -1809,8 +1808,6 @@ SYSCALL_DEFINE3(getsockname, int, fd, struct sockaddr __user *, usockaddr,
 	if (err)
 		goto out_put;
 	err = move_addr_to_user(&address, len, usockaddr, usockaddr_len);
-
-	gr_attach_curr_ip(newsock->sk);
 
 out_put:
 	fput_light(sock->file, fput_needed);
@@ -1827,7 +1824,7 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
 		int __user *, usockaddr_len)
 {
 	struct socket *sock;
-	struct sockaddr_storage address;
+	struct sockaddr_storage address = { };
 	int len, err, fput_needed;
 
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
@@ -1862,19 +1859,14 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 		int, addr_len)
 {
 	struct socket *sock;
-	struct sockaddr *sck;
 	struct sockaddr_storage address;
 	int err;
 	struct msghdr msg;
 	struct iovec iov;
 	int fput_needed;
 
-	qmp_sphinx_logk_sendto(fd, buff, len, flags, addr, addr_len);
-
 	if (len > INT_MAX)
 		len = INT_MAX;
-	if (unlikely(!access_ok(VERIFY_READ, buff, len)))
-		return -EFAULT;
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
@@ -1932,12 +1924,8 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 	int err, err2;
 	int fput_needed;
 
-	qmp_sphinx_logk_recvfrom(fd, ubuf, size, flags, addr, addr_len);
-
 	if (size > INT_MAX)
 		size = INT_MAX;
-	if (unlikely(!access_ok(VERIFY_WRITE, ubuf, size)))
-		return -EFAULT;
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
