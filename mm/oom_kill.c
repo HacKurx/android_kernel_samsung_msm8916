@@ -61,7 +61,7 @@ static bool has_intersects_mems_allowed(struct task_struct *start,
 	bool ret = false;
 
 	rcu_read_lock();
-	do {
+	for_each_thread(start, tsk) {
 		if (mask) {
 			/*
 			 * If this is a mempolicy constrained oom, tsk's
@@ -100,16 +100,16 @@ static bool has_intersects_mems_allowed(struct task_struct *tsk,
  */
 struct task_struct *find_lock_task_mm(struct task_struct *p)
 {
-	struct task_struct *t = p;
+	struct task_struct *t;
 
 	rcu_read_lock();
 
-	do {
+	for_each_thread(p, t) {
 		task_lock(t);
 		if (likely(t->mm))
 			goto found;
 		task_unlock(t);
-	} while_each_thread(p, t);
+	}
 	t = NULL;
 found:
 	rcu_read_unlock();
@@ -462,7 +462,7 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 	 * still freeing memory.
 	 */
 	read_lock(&tasklist_lock);
-	do {
+	for_each_thread(p, t) {
 		list_for_each_entry(child, &t->children, sibling) {
 			unsigned int child_points;
 
@@ -480,7 +480,7 @@ void oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 				get_task_struct(victim);
 			}
 		}
-	} while_each_thread(p, t);
+	}
 	read_unlock(&tasklist_lock);
 
 	p = find_lock_task_mm(victim);
