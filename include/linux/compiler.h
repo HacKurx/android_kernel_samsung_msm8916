@@ -379,6 +379,14 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 # define __attribute_const__	/* unimplemented */
 #endif
 
+#ifndef __randomize_layout
+# define __randomize_layout
+#endif
+
+#ifndef __no_randomize_layout
+# define __no_randomize_layout
+#endif
+
 #ifndef __no_const
 # define __no_const
 #endif
@@ -397,6 +405,10 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 
 #ifndef __latent_entropy
 # define __latent_entropy
+#endif
+
+#ifndef const_cast
+# define const_cast(x)	(x)
 #endif
 
 /*
@@ -437,6 +449,8 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 #ifndef __same_type
 # define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
 #endif
+
+#define __type_is_unsigned(t) (__same_type((t)0, 0UL) || __same_type((t)0, 0U) || __same_type((t)0, (unsigned short)0) || __same_type((t)0, (unsigned char)0))
 
 /* Is this type a native word size -- useful for atomic operations */
 #ifndef __native_word
