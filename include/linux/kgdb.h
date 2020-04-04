@@ -254,7 +254,7 @@ struct kgdb_arch {
 	void	(*correct_hw_break)(void);
 
 	void	(*enable_nmi)(bool on);
-} __do_const;
+};
 
 /**
  * struct kgdb_io - Describe the interface for an I/O driver to talk with KGDB.
@@ -279,7 +279,7 @@ struct kgdb_io {
 	void			(*pre_exception) (void);
 	void			(*post_exception) (void);
 	int			is_console;
-} __do_const;
+};
 
 extern struct kgdb_arch		arch_kgdb_ops;
 

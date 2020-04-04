@@ -763,7 +763,7 @@ static struct page_state {
 	unsigned long res;
 	char *msg;
 	int (*action)(struct page *p, unsigned long pfn);
-} __do_const error_states[] = {
+} error_states[] = {
 	{ reserved,	reserved,	"reserved kernel",	me_kernel },
 	/*
 	 * free pages are specially detected outside this table:

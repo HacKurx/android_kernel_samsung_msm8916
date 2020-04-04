@@ -2406,7 +2406,7 @@ struct ext4_attr {
 	ssize_t (*store)(struct ext4_attr *, struct ext4_sb_info *,
 			 const char *, size_t);
 	int offset;
-} __do_const;
+};
 
 static int parse_strtoull(const char *buf,
 		unsigned long long max, unsigned long long *value)

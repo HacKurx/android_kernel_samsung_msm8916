@@ -1999,8 +1999,8 @@ struct v4l2_ioctl_info {
 				struct file *file, void *fh, void *p);
 	} u;
 	void (*debug)(const void *arg, bool write_only);
-} __do_const;
-typedef struct v4l2_ioctl_info __no_const v4l2_ioctl_info_no_const;
+};
+typedef struct v4l2_ioctl_info v4l2_ioctl_info_no_const;
 
 /* This control needs a priority check */
 #define INFO_FL_PRIO	(1 << 0)

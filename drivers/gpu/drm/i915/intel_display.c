@@ -8939,13 +8939,13 @@ struct intel_quirk {
 	int subsystem_vendor;
 	int subsystem_device;
 	void (*hook)(struct drm_device *dev);
-} __do_const;
+};
 
 /* For systems that don't have a meaningful PCI subdevice/subvendor ID */
 struct intel_dmi_quirk {
 	void (*hook)(struct drm_device *dev);
 	const struct dmi_system_id (*dmi_id_list)[];
-} __do_const;
+};
 
 static int intel_dmi_reverse_brightness(const struct dmi_system_id *id)
 {

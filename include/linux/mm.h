@@ -256,7 +256,7 @@ struct vm_operations_struct {
 	int (*remap_pages)(struct vm_area_struct *vma, unsigned long addr,
 			   unsigned long size, pgoff_t pgoff);
 };
-typedef struct vm_operations_struct __no_const vm_operations_struct_no_const;
+typedef struct vm_operations_struct vm_operations_struct_no_const;
 
 struct mmu_gather;
 struct inode;

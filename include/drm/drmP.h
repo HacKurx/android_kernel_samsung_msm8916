@@ -320,7 +320,7 @@ struct drm_ioctl_desc {
 	drm_ioctl_t func;
 	unsigned int cmd_drv;
 	const char *name;
-} __do_const;
+};
 
 /**
  * Creates a driver or general drm_ioctl_desc array entry for the given
@@ -1018,7 +1018,7 @@ struct drm_info_list {
 	int (*show)(struct seq_file*, void*); /** show callback */
 	u32 driver_features; /**< Required driver features for this entry */
 	void *data;
-} __do_const;
+};
 
 /**
  * debugfs node structure. This structure represents a debugfs file.

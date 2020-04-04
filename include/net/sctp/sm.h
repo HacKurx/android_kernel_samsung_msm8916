@@ -87,7 +87,7 @@ typedef void (sctp_timer_event_t) (unsigned long);
 typedef struct {
 	sctp_state_fn_t *fn;
 	const char *name;
-} __do_const sctp_sm_table_entry_t;
+} sctp_sm_table_entry_t;
 
 /* A naming convention of "sctp_sf_xxx" applies to all the state functions
  * currently in use.

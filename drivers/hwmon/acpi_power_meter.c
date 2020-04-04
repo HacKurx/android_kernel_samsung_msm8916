@@ -117,7 +117,7 @@ struct sensor_template {
 		       struct device_attribute *devattr,
 		       const char *buf, size_t count);
 	int index;
-} __do_const;
+};
 
 /* Averaging interval */
 static int update_avg_interval(struct acpi_power_meter_resource *resource)

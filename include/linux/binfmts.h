@@ -76,7 +76,7 @@ struct linux_binfmt {
 	void (*handle_mprotect)(struct vm_area_struct *vma, unsigned long newflags);
 	void (*handle_mmap)(struct file *);
 	unsigned long min_coredump;	/* minimal dump size */
-} __do_const;
+};
 
 extern void __register_binfmt(struct linux_binfmt *fmt, int insert);
 

@@ -184,11 +184,15 @@
 
 #if GCC_VERSION >= 40500
 
+/* FIX-ME
+drivers/staging/built-in.o:(.bss+0x4): multiple definition of `__no_const'
+drivers/base/built-in.o:(.bss+0x22c): first defined here
+
 #ifdef CONSTIFY_PLUGIN
 #define __no_const __attribute__((no_const))
 #define __do_const __attribute__((do_const))
-#define const_cast(x) (*(typeof((typeof(x))0) *)&(x))
 #endif
+*/
 
 #ifdef SIZE_OVERFLOW_PLUGIN
 #define __size_overflow(...) __attribute__((size_overflow(__VA_ARGS__)))
