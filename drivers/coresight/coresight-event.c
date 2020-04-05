@@ -50,17 +50,6 @@ static void event_abort_undef_instr(void *ignore,
 	}
 }
 
-static void event_abort_unhandled_abort(void *ignore,
-					struct pt_regs *regs,
-					unsigned long addr,
-					unsigned int fsr)
-{
-	if (user_mode(regs)) {
-		coresight_abort();
-		pr_debug("coresight_event: addr: %lu, fsr:%u", addr, fsr);
-	}
-}
-
 static void event_abort_kernel_panic(void *ignore, long state)
 {
 	coresight_abort();
@@ -76,14 +65,9 @@ static int event_abort_register(void)
 	ret = register_trace_undef_instr(event_abort_undef_instr, NULL);
 	if (ret)
 		goto err_undef_instr;
-	ret = register_trace_unhandled_abort(event_abort_unhandled_abort, NULL);
-	if (ret)
-		goto err_unhandled_abort;
 
 	return 0;
 
-err_unhandled_abort:
-	unregister_trace_undef_instr(event_abort_undef_instr, NULL);
 err_undef_instr:
 	unregister_trace_user_fault(event_abort_user_fault, NULL);
 err_usr_fault:
@@ -94,7 +78,6 @@ static void event_abort_unregister(void)
 {
 	unregister_trace_user_fault(event_abort_user_fault, NULL);
 	unregister_trace_undef_instr(event_abort_undef_instr, NULL);
-	unregister_trace_unhandled_abort(event_abort_unhandled_abort, NULL);
 }
 
 static int event_abort_set(const char *val, struct kernel_param *kp)
