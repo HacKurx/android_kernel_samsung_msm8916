@@ -3,7 +3,7 @@ ifeq ($(CONFIG_OF),y)
 obj-$(CONFIG_ARCH_MSM8974)		+= sec_board-msm8974.o
 obj-$(CONFIG_ARCH_MSM8226)		+= sec_board-msm8226.o
 obj-$(CONFIG_ARCH_APQ8084)		+= sec_board-8084.o
-obj-$(CONFIG_ARCH_MSM8610)		+= sec_board-msm8610.o
+#obj-$(CONFIG_ARCH_MSM8610)		+= sec_board-msm8610.o
 obj-$(CONFIG_ARCH_MSM8916)		+= sec_board-battery.o
 endif
 obj-$(CONFIG_FUELGAUGE_MAX17042)	+= max17042_fuelgauge.o	sec_fuelgauge.o
