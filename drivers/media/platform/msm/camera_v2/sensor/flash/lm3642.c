@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -12,14 +12,13 @@
  */
 #include <linux/module.h>
 #include <linux/export.h>
-#include <mach/gpiomux.h>
 #include "msm_camera_io_util.h"
 #include "msm_led_flash.h"
 
 #define FLASH_NAME "ti,lm3642"
 
-#define CONFIG_LM3642_DEBUG
-#ifdef CONFIG_LM3642_DEBUG
+#define CONFIG_MSMB_CAMERA_DEBUG
+#ifdef CONFIG_MSMB_CAMERA_DEBUG
 #define LM3642_DBG(fmt, args...) pr_err(fmt, ##args)
 #else
 #define LM3642_DBG(fmt, args...)

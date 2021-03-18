@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,7 +20,7 @@
 #include "msm_cci.h"
 
 #undef CDBG
-#define CDBG(fmt, args...) pr_err(fmt, ##args)
+#define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
 DEFINE_MSM_MUTEX(msm_flash_mutex);
 
@@ -155,6 +155,22 @@ static int32_t msm_flash_i2c_write_table(
 		&flash_ctrl->flash_i2c_client, &conf_array);
 }
 
+#ifdef CONFIG_COMPAT
+static void msm_flash_copy_power_settings_compat(
+	struct msm_sensor_power_setting *ps,
+	struct msm_sensor_power_setting32 *ps32, uint32_t size)
+{
+	uint16_t i = 0;
+
+	for (i = 0; i < size; i++) {
+		ps[i].config_val = ps32[i].config_val;
+		ps[i].delay = ps32[i].delay;
+		ps[i].seq_type = ps32[i].seq_type;
+		ps[i].seq_val = ps32[i].seq_val;
+	}
+}
+#endif
+
 static int32_t msm_flash_i2c_init(
 	struct msm_flash_ctrl_t *flash_ctrl,
 	struct msm_flash_cfg_data_t *flash_data)
@@ -163,6 +179,7 @@ static int32_t msm_flash_i2c_init(
 	struct msm_flash_init_info_t *flash_init_info =
 		flash_data->cfg.flash_init_info;
 	struct msm_camera_i2c_reg_setting_array *settings = NULL;
+	struct msm_camera_cci_client *cci_client = NULL;
 #ifdef CONFIG_COMPAT
 	struct msm_sensor_power_setting_array32 *power_setting_array32 = NULL;
 #endif
@@ -215,20 +232,30 @@ static int32_t msm_flash_i2c_init(
 			power_setting_array32 = NULL;
 			return -EINVAL;
 		}
+		/* Copy the settings from compat struct to regular struct */
+		msm_flash_copy_power_settings_compat(
+			flash_ctrl->power_setting_array.power_setting_a,
+			power_setting_array32->power_setting_a,
+			flash_ctrl->power_setting_array.size);
 
-		memcpy(&flash_ctrl->power_setting_array.power_down_setting_a,
-			&power_setting_array32->power_down_setting_a,
-			sizeof(power_setting_array32->power_down_setting_a));
-		memcpy(&flash_ctrl->power_setting_array.power_setting_a,
-			&power_setting_array32->power_setting_a,
-			sizeof(power_setting_array32->power_setting_a));
-	}
+		msm_flash_copy_power_settings_compat(
+			flash_ctrl->power_setting_array.power_down_setting_a,
+			power_setting_array32->power_down_setting_a,
+			flash_ctrl->power_setting_array.size_down);
+	} else
 #endif
 	if (copy_from_user(&flash_ctrl->power_setting_array,
 		(void *)flash_init_info->power_setting_array,
 		sizeof(struct msm_sensor_power_setting_array))) {
 		pr_err("%s copy_from_user failed %d\n", __func__, __LINE__);
 		return -EFAULT;
+	}
+
+	if (flash_ctrl->flash_device_type == MSM_CAMERA_PLATFORM_DEVICE) {
+		cci_client = flash_ctrl->flash_i2c_client.cci_client;
+		cci_client->sid = flash_init_info->slave_addr >> 1;
+		cci_client->retries = 3;
+		cci_client->id_map = 0;
 	}
 
 	flash_ctrl->power_info.power_setting =
@@ -329,7 +356,7 @@ static int32_t msm_flash_i2c_release(
 	int32_t rc = 0;
 
 	if (!(&flash_ctrl->power_info) || !(&flash_ctrl->flash_i2c_client)) {
-		pr_err("%s:%d failed: %pK %pK\n",
+		pr_err("%s:%d failed: %p %p\n",
 			__func__, __LINE__, &flash_ctrl->power_info,
 			&flash_ctrl->flash_i2c_client);
 		return -EINVAL;
@@ -420,9 +447,21 @@ static int32_t msm_flash_init(
 	if (flash_data->cfg.flash_init_info->flash_driver_type ==
 		FLASH_DRIVER_DEFAULT) {
 		flash_driver_type = flash_ctrl->flash_driver_type;
+		for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+			flash_data->flash_current[i] =
+				flash_ctrl->flash_max_current[i];
+			flash_data->flash_duration[i] =
+				flash_ctrl->flash_max_duration[i];
+		}
 	} else if (flash_data->cfg.flash_init_info->flash_driver_type ==
 		flash_ctrl->flash_driver_type) {
 		flash_driver_type = flash_ctrl->flash_driver_type;
+		for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+			flash_ctrl->flash_max_current[i] =
+				flash_data->flash_current[i];
+			flash_data->flash_duration[i] =
+				flash_ctrl->flash_max_duration[i];
+		}
 	}
 
 	if (flash_driver_type == FLASH_DRIVER_DEFAULT) {
@@ -483,12 +522,12 @@ static int32_t msm_flash_init_prepare(
 
 	flash_data_k.cfg.flash_init_info = &flash_init_info;
 	if (copy_from_user(&flash_init_info,
-			(void *)(flash_data->cfg.flash_init_info),
-			sizeof(struct msm_flash_init_info_t))) {
-			pr_err("%s copy_from_user failed %d\n",
-				__func__, __LINE__);
-			return -EFAULT;
-		}
+		(void *)(flash_data->cfg.flash_init_info),
+		sizeof(struct msm_flash_init_info_t))) {
+		pr_err("%s copy_from_user failed %d\n",
+			__func__, __LINE__);
+		return -EFAULT;
+	}
 	return msm_flash_init(flash_ctrl, &flash_data_k);
 }
 #endif
@@ -503,21 +542,23 @@ static int32_t msm_flash_low(
 	CDBG("Enter\n");
 	/* Turn off flash triggers */
 	for (i = 0; i < flash_ctrl->flash_num_sources; i++)
-		led_trigger_event(flash_ctrl->flash_trigger[i], 0);
+		if (flash_ctrl->flash_trigger[i])
+			led_trigger_event(flash_ctrl->flash_trigger[i], 0);
 
 	/* Turn on flash triggers */
 	for (i = 0; i < flash_ctrl->torch_num_sources; i++) {
 		if (flash_ctrl->torch_trigger[i]) {
 			max_current = flash_ctrl->torch_max_current[i];
-			if (flash_data->cfg.flash_current[i] >= 0 &&
-				flash_data->cfg.flash_current[i] <
+			if (flash_data->flash_current[i] >= 0 &&
+				flash_data->flash_current[i] <
 				max_current) {
-				curr = flash_data->cfg.flash_current[i];
+				curr = flash_data->flash_current[i];
 			} else {
 				curr = flash_ctrl->torch_op_current[i];
 				pr_debug("LED current clamped to %d\n",
 					curr);
 			}
+			CDBG("low_flash_current[%d] = %d", i, curr);
 			led_trigger_event(flash_ctrl->torch_trigger[i],
 				curr);
 		}
@@ -537,21 +578,23 @@ static int32_t msm_flash_high(
 
 	/* Turn off torch triggers */
 	for (i = 0; i < flash_ctrl->torch_num_sources; i++)
-		led_trigger_event(flash_ctrl->torch_trigger[i], 0);
+		if (flash_ctrl->torch_trigger[i])
+			led_trigger_event(flash_ctrl->torch_trigger[i], 0);
 
 	/* Turn on flash triggers */
 	for (i = 0; i < flash_ctrl->flash_num_sources; i++) {
 		if (flash_ctrl->flash_trigger[i]) {
 			max_current = flash_ctrl->flash_max_current[i];
-			if (flash_data->cfg.flash_current[i] >= 0 &&
-				flash_data->cfg.flash_current[i] <
+			if (flash_data->flash_current[i] >= 0 &&
+				flash_data->flash_current[i] <
 				max_current) {
-				curr = flash_data->cfg.flash_current[i];
+				curr = flash_data->flash_current[i];
 			} else {
 				curr = flash_ctrl->flash_op_current[i];
-				pr_debug("LED current clamped to %d\n",
-					curr);
+				pr_debug("LED flash_current[%d] clamped %d\n",
+					i, curr);
 			}
+			CDBG("high_flash_current[%d] = %d", i, curr);
 			led_trigger_event(flash_ctrl->flash_trigger[i],
 				curr);
 		}
@@ -582,7 +625,7 @@ static int32_t msm_flash_release(
 static int32_t msm_flash_config(struct msm_flash_ctrl_t *flash_ctrl,
 	void __user *argp)
 {
-	int32_t rc = 0;
+	int32_t rc = -EINVAL;
 	struct msm_flash_cfg_data_t *flash_data =
 		(struct msm_flash_cfg_data_t *) argp;
 
@@ -595,20 +638,24 @@ static int32_t msm_flash_config(struct msm_flash_ctrl_t *flash_ctrl,
 		rc = msm_flash_init_prepare(flash_ctrl, flash_data);
 		break;
 	case CFG_FLASH_RELEASE:
-		rc = flash_ctrl->func_tbl->camera_flash_release(
-			flash_ctrl);
+		if (flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
+			rc = flash_ctrl->func_tbl->camera_flash_release(
+				flash_ctrl);
 		break;
 	case CFG_FLASH_OFF:
-		rc = flash_ctrl->func_tbl->camera_flash_off(
-			flash_ctrl, flash_data);
+		if (flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
+			rc = flash_ctrl->func_tbl->camera_flash_off(
+				flash_ctrl, flash_data);
 		break;
 	case CFG_FLASH_LOW:
-		rc = flash_ctrl->func_tbl->camera_flash_low(
-			flash_ctrl, flash_data);
+		if (flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
+			rc = flash_ctrl->func_tbl->camera_flash_low(
+				flash_ctrl, flash_data);
 		break;
 	case CFG_FLASH_HIGH:
-		rc = flash_ctrl->func_tbl->camera_flash_high(
-			flash_ctrl, flash_data);
+		if (flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)
+			rc = flash_ctrl->func_tbl->camera_flash_high(
+				flash_ctrl, flash_data);
 		break;
 	default:
 		rc = -EFAULT;
@@ -644,11 +691,14 @@ static long msm_flash_subdev_ioctl(struct v4l2_subdev *sd,
 		return msm_flash_get_subdev_id(fctrl, argp);
 	case VIDIOC_MSM_FLASH_CFG:
 		return msm_flash_config(fctrl, argp);
-	case MSM_SD_NOTIFY_FREEZE:
-		return 0;
 	case MSM_SD_SHUTDOWN:
-		*(int *)argp = MSM_CAMERA_LED_RELEASE;
-		return msm_flash_config(fctrl, argp);
+		if (!fctrl->func_tbl) {
+			pr_err("fctrl->func_tbl NULL\n");
+			return -EINVAL;
+		} else {
+			*(int *)argp = CFG_FLASH_RELEASE;
+			return msm_flash_config(fctrl, argp);
+		}
 	default:
 		pr_err_ratelimited("invalid cmd %d\n", cmd);
 		return -ENOIOCTLCMD;
@@ -955,6 +1005,7 @@ static int32_t msm_flash_get_dt_data(struct device_node *of_node,
 static long msm_flash_subdev_do_ioctl(
 	struct file *file, unsigned int cmd, void *arg)
 {
+	int32_t i = 0;
 	int32_t rc = 0;
 	struct video_device *vdev = video_devdata(file);
 	struct v4l2_subdev *sd = vdev_to_v4l2_subdev(vdev);
@@ -966,6 +1017,10 @@ static long msm_flash_subdev_do_ioctl(
 
 	CDBG("Enter");
 	flash_data.cfg_type = u32->cfg_type;
+	for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+		flash_data.flash_current[i] = u32->flash_current[i];
+		flash_data.flash_duration[i] = u32->flash_duration[i];
+	}
 	switch (cmd) {
 	case VIDIOC_MSM_FLASH_CFG32:
 		cmd = VIDIOC_MSM_FLASH_CFG;
@@ -986,6 +1041,8 @@ static long msm_flash_subdev_do_ioctl(
 			}
 			flash_init_info.flash_driver_type =
 				flash_init_info32.flash_driver_type;
+			flash_init_info.slave_addr =
+				flash_init_info32.slave_addr;
 			flash_init_info.settings =
 				compat_ptr(flash_init_info32.settings);
 			flash_init_info.power_setting_array =
@@ -996,14 +1053,15 @@ static long msm_flash_subdev_do_ioctl(
 			break;
 		}
 		break;
-	case VIDIOC_MSM_FLASH_CFG:
-		pr_err("invalid cmd 0x%x received\n", cmd);
-		return -EINVAL;
 	default:
 		return msm_flash_subdev_ioctl(sd, cmd, arg);
 	}
 
 	rc =  msm_flash_subdev_ioctl(sd, cmd, &flash_data);
+	for (i = 0; i < MAX_LED_TRIGGERS; i++) {
+		u32->flash_current[i] = flash_data.flash_current[i];
+		u32->flash_duration[i] = flash_data.flash_duration[i];
+	}
 	CDBG("Exit");
 	return rc;
 }

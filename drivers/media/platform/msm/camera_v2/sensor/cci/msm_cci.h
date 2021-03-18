@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,8 +29,13 @@
 
 #define CCI_PINCTRL_STATE_DEFAULT "cci_default"
 #define CCI_PINCTRL_STATE_SLEEP "cci_suspend"
-#define CCI_NUM_CLK_MAX 16
 
+#define CCI_NUM_CLK_MAX	16
+#define CCI_NUM_CLK_CASES 5
+#define CCI_CLK_SRC_NAME "cci_src_clk"
+#define MSM_CCI_WRITE_DATA_PAYLOAD_SIZE_10 10
+#define MSM_CCI_WRITE_DATA_PAYLOAD_SIZE_11 11
+#define BURST_MIN_FREE_SIZE 8
 
 enum cci_i2c_queue_t {
 	QUEUE_0,
@@ -57,8 +62,8 @@ enum msm_cci_cmd_type {
 	MSM_CCI_SET_SYNC_CID,
 	MSM_CCI_I2C_READ,
 	MSM_CCI_I2C_WRITE,
+	MSM_CCI_I2C_WRITE_SEQ,
 	MSM_CCI_GPIO_WRITE,
-	MSM_CCI_I2C_WRITE_BURST,
 };
 
 struct msm_camera_cci_wait_sync_cfg {
@@ -115,6 +120,7 @@ struct msm_cci_clk_params_t {
 	uint8_t hw_scl_stretch_en;
 	uint8_t hw_trdhld;
 	uint8_t hw_tsp;
+	uint32_t cci_clk_src;
 };
 
 enum msm_cci_state_t {
@@ -135,6 +141,7 @@ struct cci_device {
 	uint8_t ref_count;
 	enum msm_cci_state_t cci_state;
 	uint32_t num_clk;
+	uint32_t num_clk_cases;
 
 	struct clk *cci_clk[CCI_NUM_CLK_MAX];
 	struct msm_camera_cci_i2c_queue_info
@@ -146,6 +153,11 @@ struct cci_device {
 	uint8_t master_clk_init[MASTER_MAX];
 	struct msm_pinctrl_info cci_pinctrl;
 	uint8_t cci_pinctrl_status;
+	struct regulator *reg_ptr;
+	uint32_t cycles_per_us;
+	uint32_t cci_clk_src;
+	uint8_t payload_size;
+	uint8_t support_seq_write;
 };
 
 enum msm_cci_i2c_cmd_type {
@@ -181,7 +193,14 @@ enum msm_cci_gpio_cmd_type {
 	CCI_GPIO_INVALID_CMD,
 };
 
+#ifdef CONFIG_MSM_CCI
 struct v4l2_subdev *msm_cci_get_subdev(void);
+#else
+static inline struct v4l2_subdev *msm_cci_get_subdev(void)
+{
+	return NULL;
+}
+#endif
 
 #define VIDIOC_MSM_CCI_CFG \
 	_IOWR('V', BASE_VIDIOC_PRIVATE + 23, struct msm_camera_cci_ctrl *)

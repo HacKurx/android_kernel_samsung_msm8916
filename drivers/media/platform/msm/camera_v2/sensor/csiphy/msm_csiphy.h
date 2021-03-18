@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2014, 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,6 +21,7 @@
 #include "msm_sd.h"
 
 #define MAX_CSIPHY 3
+#define CSIPHY_NUM_CLK_MAX  16
 
 struct csiphy_reg_parms_t {
 /*MIPI CSI PHY registers*/
@@ -33,8 +34,8 @@ struct csiphy_reg_parms_t {
 	uint32_t mipi_csiphy_lnck_cfg2_addr;
 	uint32_t mipi_csiphy_lnck_cfg3_addr;
 	uint32_t mipi_csiphy_lnck_cfg4_addr;
-	uint32_t mipi_csiphy_lnck_cfg5_addr;
-	uint32_t mipi_csiphy_lnck_misc1_addr;
+	uint32_t mipi_csiphy_lnn_test_imp;
+	uint32_t mipi_csiphy_lnn_misc1_addr;
 	uint32_t mipi_csiphy_glbl_reset_addr;
 	uint32_t mipi_csiphy_glbl_pwr_cfg_addr;
 	uint32_t mipi_csiphy_glbl_irq_cmd_addr;
@@ -77,11 +78,14 @@ struct csiphy_device {
 	enum msm_csiphy_state_t csiphy_state;
 	struct csiphy_ctrl_t *ctrl_reg;
 	uint32_t num_clk;
-
-	struct clk *csiphy_clk[8];
-
+	struct clk *csiphy_clk[CSIPHY_NUM_CLK_MAX];
 	int32_t ref_count;
 	uint16_t lane_mask[MAX_CSIPHY];
+	uint32_t is_3_1_20nm_hw;
+	uint32_t csiphy_clk_index;
+	uint32_t csiphy_max_clk;
+	struct regulator *csi_vdd;
+	struct regulator *reg_ptr;
 };
 
 #define VIDIOC_MSM_CSIPHY_RELEASE \

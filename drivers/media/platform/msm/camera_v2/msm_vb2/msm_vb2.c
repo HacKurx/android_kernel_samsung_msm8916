@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -226,6 +226,7 @@ static int msm_vb2_put_buf(struct vb2_buffer *vb, int session_id,
 {
 	struct msm_stream *stream;
 	struct msm_vb2_buffer *msm_vb2;
+	struct vb2_buffer *vb2_buf = NULL;
 	int rc = 0;
 	unsigned long flags;
 	stream = msm_get_stream(session_id, stream_id);
@@ -240,7 +241,7 @@ static int msm_vb2_put_buf(struct vb2_buffer *vb, int session_id,
 				break;
 		}
 		if (vb2_buf != vb) {
-			pr_err("VB buffer is INVALID vb=%pK, ses_id=%d, str_id=%d\n",
+			pr_err("VB buffer is INVALID vb=%p, ses_id=%d, str_id=%d\n",
 					vb, session_id, stream_id);
 			spin_unlock_irqrestore(&stream->stream_lock, flags);
 			return -EINVAL;
@@ -253,7 +254,8 @@ static int msm_vb2_put_buf(struct vb2_buffer *vb, int session_id,
 		} else
 			rc = -EINVAL;
 	} else {
-		pr_err("%s: VB buffer is null\n", __func__);
+		pr_err(" VB buffer is null for ses_id=%d, str_id=%d\n",
+			    session_id, stream_id);
 		rc = -EINVAL;
 	}
 	spin_unlock_irqrestore(&stream->stream_lock, flags);
@@ -280,7 +282,7 @@ static int msm_vb2_buf_done(struct vb2_buffer *vb, int session_id,
 				break;
 		}
 		if (vb2_buf != vb) {
-			pr_err("VB buffer is INVALID ses_id=%d, str_id=%d, vb=%pK\n",
+			pr_err("VB buffer is INVALID ses_id=%d, str_id=%d, vb=%p\n",
 				    session_id, stream_id, vb);
 			spin_unlock_irqrestore(&stream->stream_lock, flags);
 			return -EINVAL;
@@ -295,11 +297,10 @@ static int msm_vb2_buf_done(struct vb2_buffer *vb, int session_id,
 		} else
 			rc = -EINVAL;
 	} else {
-		pr_err("%s:%d VB buffer is NULL for ses_id=%d, str_id=%d\n",
-			__func__, __LINE__, session_id, stream_id);
+		pr_err(" VB buffer is NULL for ses_id=%d, str_id=%d\n",
+			    session_id, stream_id);
 		rc = -EINVAL;
 	}
-out:
 	spin_unlock_irqrestore(&stream->stream_lock, flags);
 	return rc;
 }
