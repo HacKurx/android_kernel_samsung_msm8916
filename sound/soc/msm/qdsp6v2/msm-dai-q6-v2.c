@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -717,6 +717,7 @@ static int msm_dai_q6_spdif_hw_params(struct snd_pcm_substream *substream,
 	dai_data->spdif_port.cfg.num_channels = dai_data->channels;
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
+        case SNDRV_PCM_FORMAT_S24_3LE:
 		dai_data->spdif_port.cfg.bit_width = 16;
 		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
@@ -936,6 +937,7 @@ static int msm_dai_q6_cdc_hw_params(struct snd_pcm_hw_params *params,
 		dai_data->port_config.i2s.bit_width = 16;
 		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
+        case SNDRV_PCM_FORMAT_S24_3LE:
 		dai_data->port_config.i2s.bit_width = 24;
 		break;
 	default:
@@ -1015,6 +1017,7 @@ static int msm_dai_q6_slim_bus_hw_params(struct snd_pcm_hw_params *params,
 		dai_data->port_config.slim_sch.bit_width = 16;
 		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
+        case SNDRV_PCM_FORMAT_S24_3LE:
 		dai_data->port_config.slim_sch.bit_width = 24;
 		break;
 	default:
@@ -1161,7 +1164,6 @@ static int msm_dai_q6_hw_params(struct snd_pcm_substream *substream,
 		break;
 	case INT_BT_SCO_RX:
 	case INT_BT_SCO_TX:
-	case INT_BT_A2DP_RX:
 	case INT_FM_RX:
 	case INT_FM_TX:
 		rc = msm_dai_q6_bt_fm_hw_params(params, dai, substream->stream);
@@ -1504,25 +1506,6 @@ static struct snd_soc_dai_driver msm_dai_q6_bt_sco_rx_dai = {
 	.remove = msm_dai_q6_dai_remove,
 };
 
-static struct snd_soc_dai_driver msm_dai_q6_bt_a2dp_rx_dai = {
-	.playback = {
-		.stream_name = "Internal BT-A2DP Playback",
-		.aif_name = "INT_BT_A2DP_RX",
-		.rates = SNDRV_PCM_RATE_48000,
-		.formats = SNDRV_PCM_FMTBIT_S16_LE,
-		.channels_min = 1,
-		.channels_max = 2,
-		.rate_max = 48000,
-		.rate_min = 48000,
-	},
-	.ops = &msm_dai_q6_ops,
-	.id = INT_BT_A2DP_RX,
-	.probe = msm_dai_q6_dai_probe,
-	.remove = msm_dai_q6_dai_remove,
-};
-
-
-
 static struct snd_soc_dai_driver msm_dai_q6_bt_sco_tx_dai = {
 	.capture = {
 		.stream_name = "Internal BT-SCO Capture",
@@ -1676,7 +1659,7 @@ static int msm_auxpcm_dev_probe(struct platform_device *pdev)
 		goto fail_pdata_nomem;
 	}
 
-	dev_dbg(&pdev->dev, "%s: dev %pK, dai_data %pK, auxpcm_pdata %pK\n",
+	dev_dbg(&pdev->dev, "%s: dev %p, dai_data %p, auxpcm_pdata %p\n",
 		__func__, &pdev->dev, dai_data, auxpcm_pdata);
 
 	rc = of_property_read_u32_array(pdev->dev.of_node,
@@ -2042,7 +2025,9 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
 			SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_96000 |
 			SNDRV_PCM_RATE_192000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE |
+                                   SNDRV_PCM_FMTBIT_S24_3LE,
 			.channels_min = 1,
 			.channels_max = 8,
 			.rate_min = 8000,
@@ -2058,12 +2043,15 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.stream_name = "Slimbus1 Capture",
 			.aif_name = "SLIMBUS_1_TX",
 			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
-			SNDRV_PCM_RATE_48000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 |
+			SNDRV_PCM_RATE_192000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE |
+				   SNDRV_PCM_FMTBIT_S24_3LE,
 			.channels_min = 1,
 			.channels_max = 2,
 			.rate_min = 8000,
-			.rate_max = 48000,
+			.rate_max = 192000,
 		},
 		.ops = &msm_dai_q6_ops,
 		.id = SLIMBUS_1_TX,
@@ -2077,7 +2065,8 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
 			SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_96000 |
 			SNDRV_PCM_RATE_192000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE,
 			.channels_min = 1,
 			.channels_max = 8,
 			.rate_min = 8000,
@@ -2093,12 +2082,14 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.stream_name = "Slimbus3 Capture",
 			.aif_name = "SLIMBUS_3_TX",
 			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
-			SNDRV_PCM_RATE_48000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 |
+			SNDRV_PCM_RATE_192000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE,
 			.channels_min = 1,
 			.channels_max = 2,
 			.rate_min = 8000,
-			.rate_max = 48000,
+			.rate_max = 192000,
 		},
 		.ops = &msm_dai_q6_ops,
 		.id = SLIMBUS_3_TX,
@@ -2110,12 +2101,14 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.stream_name = "Slimbus4 Capture",
 			.aif_name = "SLIMBUS_4_TX",
 			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
-			SNDRV_PCM_RATE_48000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 |
+			SNDRV_PCM_RATE_192000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE,
 			.channels_min = 2,
 			.channels_max = 4,
 			.rate_min = 8000,
-			.rate_max = 48000,
+			.rate_max = 192000,
 		},
 		.ops = &msm_dai_q6_ops,
 		.id = SLIMBUS_4_TX,
@@ -2129,7 +2122,8 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
 			SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_96000 |
 			SNDRV_PCM_RATE_192000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE,
 			.channels_min = 1,
 			.channels_max = 8,
 			.rate_min = 8000,
@@ -2145,12 +2139,14 @@ static struct snd_soc_dai_driver msm_dai_q6_slimbus_tx_dai[] = {
 			.stream_name = "Slimbus6 Capture",
 			.aif_name = "SLIMBUS_6_TX",
 			.rates = SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_16000 |
-			SNDRV_PCM_RATE_48000,
-			.formats = SNDRV_PCM_FMTBIT_S16_LE,
+			SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000 |
+			SNDRV_PCM_RATE_192000,
+			.formats = SNDRV_PCM_FMTBIT_S16_LE |
+				   SNDRV_PCM_FMTBIT_S24_LE,
 			.channels_min = 1,
 			.channels_max = 2,
 			.rate_min = 8000,
-			.rate_max = 48000,
+			.rate_max = 192000,
 		},
 		.ops = &msm_dai_q6_ops,
 		.id = SLIMBUS_6_TX,
@@ -2492,6 +2488,7 @@ static int msm_dai_q6_mi2s_hw_params(struct snd_pcm_substream *substream,
 		dai_data->bitwidth = 16;
 		break;
 	case SNDRV_PCM_FORMAT_S24_LE:
+	case SNDRV_PCM_FORMAT_S24_3LE:
 		dai_data->port_config.i2s.bit_width = 24;
 		dai_data->bitwidth = 24;
 		break;
@@ -2551,11 +2548,7 @@ static int msm_dai_q6_mi2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	dev_get_drvdata(dai->dev);
 
 	if (test_bit(STATUS_PORT_STARTED,
-#ifdef CONFIG_SND_SOC_MSM8X16_WM1814	
-	    mi2s_dai_data->rx_dai.mi2s_dai_data.status_mask) &&
-#else /* CONFIG_SND_SOC_MSM8X16_WM1814 */
 	    mi2s_dai_data->rx_dai.mi2s_dai_data.status_mask) ||
-#endif /* not CONFIG_SND_SOC_MSM8X16_WM1814 */
 	    test_bit(STATUS_PORT_STARTED,
 	    mi2s_dai_data->tx_dai.mi2s_dai_data.status_mask)) {
 		dev_err(dai->dev, "%s: err chg i2s mode while dai running",
@@ -2645,12 +2638,12 @@ static struct snd_soc_dai_driver msm_dai_q6_mi2s_dai[] = {
 			.stream_name = "Primary MI2S Playback",
 			.aif_name = "PRI_MI2S_RX",
 			.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_8000 |
-			SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_96000 |
-			SNDRV_PCM_RATE_192000,
+			SNDRV_PCM_RATE_16000,
 			.formats = SNDRV_PCM_FMTBIT_S16_LE |
-				SNDRV_PCM_FMTBIT_S24_LE,
+				SNDRV_PCM_FMTBIT_S24_LE |
+				SNDRV_PCM_FMTBIT_S24_3LE,
 			.rate_min =     8000,
-			.rate_max =     192000,
+			.rate_max =     48000,
 		},
 		.capture = {
 			.stream_name = "Primary MI2S Capture",
@@ -3098,10 +3091,6 @@ register_slim_capture:
 	case INT_BT_SCO_TX:
 		rc = snd_soc_register_component(&pdev->dev, &msm_dai_q6_component,
 		&msm_dai_q6_bt_sco_tx_dai, 1);
-		break;
-	case INT_BT_A2DP_RX:
-		rc = snd_soc_register_component(&pdev->dev, &msm_dai_q6_component,
-		&msm_dai_q6_bt_a2dp_rx_dai, 1);
 		break;
 	case INT_FM_RX:
 		rc = snd_soc_register_component(&pdev->dev, &msm_dai_q6_component,

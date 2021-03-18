@@ -44,7 +44,7 @@ enum {
 /* DOLBY device definitions end */
 enum {
 	DOLBY_OFF_CACHE = 0,
-	DOLBY_SPEKAER_CACHE,
+	DOLBY_SPEAKER_CACHE,
 	DOLBY_HEADPHONE_CACHE,
 	DOLBY_HDMI_CACHE,
 	DOLBY_WFD_CACHE,
@@ -157,11 +157,11 @@ struct audio_rx_cal_data {
 static struct ds2_dap_params_s ds2_dap_params[DOLBY_MAX_CACHE];
 
 struct ds2_device_mapping {
-	int32_t device_id;
-	int port_id;
+	int32_t device_id; /* audio_out_... */
+	int port_id; /* afe port. constant for a target variant. routing-v2*/
 	/*Only one Dolby COPP  for a specific port*/
-	int copp_idx;
-	int cache_dev;
+	int copp_idx; /* idx for the copp port on which ds2 is active */
+	int cache_dev; /* idx to a shared parameter array dependent on device*/
 	uint32_t stream_ref_count;
 	bool active;
 	void *cal_data;
@@ -739,7 +739,7 @@ static int msm_ds2_dap_map_device_to_dolby_cache_devices(int32_t device_id)
 		break;
 	case EARPIECE:
 	case SPEAKER:
-		cache_dev = DOLBY_SPEKAER_CACHE;
+		cache_dev = DOLBY_SPEAKER_CACHE;
 		break;
 	case WIRED_HEADSET:
 	case WIRED_HEADPHONE:
@@ -1103,7 +1103,7 @@ static int msm_ds2_dap_send_end_point(int dev_map_idx, int endp_idx)
 	ds2_ap_params_obj = &ds2_dap_params[cache_device];
 	pr_debug("%s: cache dev %d, dev_map_idx %d\n", __func__,
 		 cache_device, dev_map_idx);
-	pr_debug("%s: endp - %pK %pK\n",  __func__,
+	pr_debug("%s: endp - %p %p\n",  __func__,
 		 &ds2_dap_params[cache_device], ds2_ap_params_obj);
 
 	params_value = kzalloc(params_length, GFP_KERNEL);
@@ -1189,7 +1189,7 @@ static int msm_ds2_dap_send_cached_params(int dev_map_idx,
 	}
 
 	ds2_ap_params_obj = &ds2_dap_params[cache_device];
-	pr_debug("%s: cached param - %pK %pK, cache_device %d\n", __func__,
+	pr_debug("%s: cached param - %p %p, cache_device %d\n", __func__,
 		 &ds2_dap_params[cache_device], ds2_ap_params_obj,
 		 cache_device);
 	params_value = kzalloc(params_length, GFP_KERNEL);
@@ -1710,24 +1710,13 @@ end:
 
 int msm_ds2_dap_set_security_control(u32 cmd, void *arg)
 {
-	int ret = 0;
 	struct dolby_param_license *dolby_license =
 				 ((struct dolby_param_license *)arg);
-	pr_err("%s: dmid %d license key %d\n", __func__,
+	pr_debug("%s: dmid %d license key %d\n", __func__,
 		dolby_license->dmid, dolby_license->license_key);
-
-	ret = core_set_dolby_manufacturer_id(dolby_license->dmid);
-	if (ret < 0) {
-		pr_err("%s: failed to set dolby manufacturer id",__func__);
-		return ret;
-	}
-
-	ret = core_set_license(dolby_license->license_key, DOLBY_DS1_LICENSE_ID);
-	if (ret < 0) {
-		pr_err("%s: failed to set dolby license",__func__);
-		return ret;
-	}
-	return ret;
+	core_set_dolby_manufacturer_id(dolby_license->dmid);
+	core_set_license(dolby_license->license_key, DOLBY_DS1_LICENSE_ID);
+	return 0;
 }
 
 int msm_ds2_dap_update_port_parameters(struct snd_hwdep *hw,  struct file *file,
@@ -1983,6 +1972,8 @@ int msm_ds2_dap_init(int port_id, int copp_idx, int channels,
 				(dev_map[i].device_id &
 				ds2_dap_params_states.device)) {
 				idx = i;
+				/* Give priority to headset in case of
+				   combo device */
 				if (dev_map[i].device_id == SPEAKER)
 					continue;
 				else
@@ -2013,21 +2004,39 @@ int msm_ds2_dap_init(int port_id, int copp_idx, int channels,
 				DAP_HARD_BYPASS) {
 				ret = msm_ds2_dap_alloc_and_store_cal_data(idx,
 						       ADM_PATH_PLAYBACK, 0);
-				if (ret < 0)
+				if (ret < 0) {
+					pr_err("%s: Failed to alloc and store cal data for idx %d, device %d, copp_idx %d",
+					       __func__,
+					       idx, dev_map[idx].device_id,
+					       dev_map[idx].copp_idx);
+					dev_map[idx].active = false;
+					dev_map[idx].copp_idx = -1;
 					goto end;
+				}
+
 				ret = adm_set_softvolume(port_id, copp_idx,
 							 &softvol);
 				if (ret < 0) {
 					pr_err("%s: Soft volume ret error %d\n",
 						__func__, ret);
+					dev_map[idx].active = false;
+					dev_map[idx].copp_idx = -1;
 					goto end;
 				}
-				ret =
-					msm_ds2_dap_init_modules_in_topology(
+
+				ret = msm_ds2_dap_init_modules_in_topology(
 							idx);
-				if (ret < 0)
+				if (ret < 0) {
+					pr_err("%s: Failed to init modules in topolofy for idx %d, device %d, copp_idx %d\n",
+					       __func__, idx,
+					       dev_map[idx].device_id,
+					       dev_map[idx].copp_idx);
+					dev_map[idx].active = false;
+					dev_map[idx].copp_idx = -1;
 					goto end;
+				}
 			}
+
 			ret =  msm_ds2_dap_commit_params(&dolby_data, 0);
 			if (ret < 0) {
 				pr_debug("%s: commit params ret %d\n",

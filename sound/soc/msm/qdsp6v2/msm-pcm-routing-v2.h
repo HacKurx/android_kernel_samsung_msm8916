@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,7 +20,6 @@
 #define LPASS_BE_HDMI "HDMI"
 #define LPASS_BE_INT_BT_SCO_RX "INT_BT_SCO_RX"
 #define LPASS_BE_INT_BT_SCO_TX "INT_BT_SCO_TX"
-#define LPASS_BE_INT_BT_A2DP_RX "INT_BT_A2DP_RX"
 #define LPASS_BE_INT_FM_RX "INT_FM_RX"
 #define LPASS_BE_INT_FM_TX "INT_FM_TX"
 #define LPASS_BE_AFE_PCM_RX "RT_PROXY_DAI_001_RX"
@@ -84,9 +83,6 @@ enum {
 	MSM_FRONTEND_DAI_MULTIMEDIA14,
 	MSM_FRONTEND_DAI_MULTIMEDIA15,
 	MSM_FRONTEND_DAI_MULTIMEDIA16,
-#ifdef CONFIG_JACK_AUDIO
-	MSM_FRONTEND_DAI_MULTIMEDIA17,
-#endif /* CONFIG_JACK_AUDIO */
 	MSM_FRONTEND_DAI_CS_VOICE,
 	MSM_FRONTEND_DAI_VOIP,
 	MSM_FRONTEND_DAI_AFE_RX,
@@ -107,18 +103,11 @@ enum {
 	MSM_FRONTEND_DAI_LSM8,
 	MSM_FRONTEND_DAI_VOICE2_STUB,
 	MSM_FRONTEND_DAI_VOWLAN,
-	MSM_FRONTEND_DAI_VOICEMMODE1,
-	MSM_FRONTEND_DAI_VOICEMMODE2,
 	MSM_FRONTEND_DAI_MAX,
 };
 
-#ifdef CONFIG_JACK_AUDIO
-#define MSM_FRONTEND_DAI_MM_SIZE (MSM_FRONTEND_DAI_MULTIMEDIA17 + 1)
-#define MSM_FRONTEND_DAI_MM_MAX_ID MSM_FRONTEND_DAI_MULTIMEDIA17
-#else
 #define MSM_FRONTEND_DAI_MM_SIZE (MSM_FRONTEND_DAI_MULTIMEDIA16 + 1)
 #define MSM_FRONTEND_DAI_MM_MAX_ID MSM_FRONTEND_DAI_MULTIMEDIA16
-#endif /* CONFIG_JACK_AUDIO */
 
 enum {
 	MSM_BACKEND_DAI_PRI_I2S_RX = 0,
@@ -166,7 +155,6 @@ enum {
 	MSM_BACKEND_DAI_SLIMBUS_6_TX,
 	MSM_BACKEND_DAI_SPDIF_RX,
 	MSM_BACKEND_DAI_SECONDARY_MI2S_RX_SD1,
-	MSM_BACKEND_DAI_INT_BT_A2DP_RX,
 	MSM_BACKEND_DAI_MAX,
 };
 
@@ -208,7 +196,7 @@ struct msm_pcm_routing_bdai_data {
 	unsigned int  sample_rate;
 	unsigned int  channel;
 	unsigned int  format;
-	u32 passthr_mode;
+	u32 compr_passthr_mode;
 	char *name;
 };
 
@@ -240,11 +228,11 @@ int msm_pcm_routing_reg_phy_stream(int fedai_id, int perf_mode, int dspst_id,
 				   int stream_type);
 void msm_pcm_routing_reg_psthr_stream(int fedai_id, int dspst_id,
 		int stream_type);
-int msm_pcm_routing_reg_phy_compr_stream(int fedai_id, bool perf_mode,
+int msm_pcm_routing_reg_phy_compr_stream(int fedai_id, int perf_mode,
 					  int dspst_id, int stream_type,
 					  uint32_t compr_passthr);
 
-int msm_pcm_routing_reg_phy_stream_v2(int fedai_id, bool perf_mode,
+int msm_pcm_routing_reg_phy_stream_v2(int fedai_id, int perf_mode,
 				      int dspst_id, int stream_type,
 				      struct msm_pcm_routing_evt event_info);
 
@@ -262,4 +250,8 @@ void msm_pcm_routing_release_lock(void);
 
 void msm_pcm_routing_reg_stream_app_type_cfg(int fedai_id, int app_type,
 					int acdb_dev_id, int sample_rate);
+
+int msm_pcm_routing_channel_mixer(int fedai_id, bool perf_mode,
+			int dspst_id, int stream_type, int be_id);
+
 #endif /*_MSM_PCM_H*/

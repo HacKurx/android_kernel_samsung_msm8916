@@ -15,6 +15,9 @@
 #include <sound/q6asm-v2.h>
 #include <sound/compress_params.h>
 #include <sound/msm-audio-effects-q6-v2.h>
+#include <sound/devdep_params.h>
+
+#define MAX_ENABLE_CMD_SIZE 32
 
 #define GET_NEXT(ptr, upper_limit, rc)                                  \
 ({                                                                      \
@@ -41,7 +44,6 @@ bool msm_audio_effects_is_effmodule_supp_in_top(int effect_module,
 	case VIRTUALIZER_MODULE:
 	case REVERB_MODULE:
 	case BASS_BOOST_MODULE:
-	case PBE_MODULE:
 	case EQ_MODULE:
 		switch (topology) {
 		case ASM_STREAM_POSTPROC_TOPO_ID_SA_PLUS:
@@ -52,6 +54,51 @@ bool msm_audio_effects_is_effmodule_supp_in_top(int effect_module,
 	default:
 		return false;
 	}
+}
+
+int msm_audio_effects_enable_extn(struct audio_client *ac,
+				struct msm_nt_eff_all_config *effects,
+				bool flag)
+{
+	uint32_t updt_params[MAX_ENABLE_CMD_SIZE] = {0};
+	uint32_t params_length;
+	int rc = 0;
+
+	pr_debug("%s\n", __func__);
+	if (!ac) {
+		pr_err("%s: cannot set audio effects\n", __func__);
+		return -EINVAL;
+	}
+	params_length = 0;
+	updt_params[0] = AUDPROC_MODULE_ID_VIRTUALIZER;
+	updt_params[1] = AUDPROC_PARAM_ID_ENABLE;
+	updt_params[2] = VIRTUALIZER_ENABLE_PARAM_SZ;
+	updt_params[3] = flag;
+	params_length += COMMAND_PAYLOAD_SZ + VIRTUALIZER_ENABLE_PARAM_SZ;
+	if (effects->virtualizer.enable_flag)
+		q6asm_send_audio_effects_params(ac, (char *)&updt_params[0],
+					params_length);
+	memset(updt_params, 0, MAX_ENABLE_CMD_SIZE);
+	params_length = 0;
+	updt_params[0] = AUDPROC_MODULE_ID_BASS_BOOST;
+	updt_params[1] = AUDPROC_PARAM_ID_ENABLE;
+	updt_params[2] = BASS_BOOST_ENABLE_PARAM_SZ;
+	updt_params[3] = flag;
+	params_length += COMMAND_PAYLOAD_SZ + BASS_BOOST_ENABLE_PARAM_SZ;
+	if (effects->bass_boost.enable_flag)
+		q6asm_send_audio_effects_params(ac, (char *)&updt_params[0],
+					params_length);
+	memset(updt_params, 0, MAX_ENABLE_CMD_SIZE);
+	params_length = 0;
+	updt_params[0] = AUDPROC_MODULE_ID_POPLESS_EQUALIZER;
+	updt_params[1] = AUDPROC_PARAM_ID_ENABLE;
+	updt_params[2] = EQ_ENABLE_PARAM_SZ;
+	updt_params[3] = flag;
+	params_length += COMMAND_PAYLOAD_SZ + EQ_ENABLE_PARAM_SZ;
+	if (effects->equalizer.enable_flag)
+		q6asm_send_audio_effects_params(ac, (char *)&updt_params[0],
+					params_length);
+	return rc;
 }
 
 int msm_audio_effects_virtualizer_handler(struct audio_client *ac,
@@ -107,7 +154,7 @@ int msm_audio_effects_virtualizer_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"VIRT ENABLE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 				AUDPROC_MODULE_ID_VIRTUALIZER;
 				*updt_params++ =
@@ -135,7 +182,7 @@ int msm_audio_effects_virtualizer_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"VIRT STRENGTH", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_VIRTUALIZER;
 				*updt_params++ =
@@ -163,7 +210,7 @@ int msm_audio_effects_virtualizer_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"VIRT OUT_TYPE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_VIRTUALIZER;
 				*updt_params++ =
@@ -191,7 +238,7 @@ int msm_audio_effects_virtualizer_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"VIRT GAIN_ADJUST", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 				AUDPROC_MODULE_ID_VIRTUALIZER;
 				*updt_params++ =
@@ -210,6 +257,8 @@ int msm_audio_effects_virtualizer_handler(struct audio_client *ac,
 	if (params_length && (rc == 0))
 		q6asm_send_audio_effects_params(ac, params,
 						params_length);
+	else
+		pr_debug("%s: did not send pp params\n", __func__);
 invalid_config:
 	kfree(params);
 	return rc;
@@ -268,7 +317,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_ENABLE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -296,7 +345,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_MODE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -324,7 +373,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_PRESET", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -352,7 +401,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_WET_MIX", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -380,7 +429,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_GAIN_ADJUST", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -408,7 +457,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_ROOM_LEVEL", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -436,7 +485,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_ROOM_HF_LEVEL", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -464,7 +513,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_DECAY_TIME", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -492,7 +541,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_DECAY_HF_RATIO", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -520,7 +569,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_REFLECTIONS_LEVEL", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 				AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -548,7 +597,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_REFLECTIONS_DELAY", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 				AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -576,7 +625,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_LEVEL", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -604,7 +653,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_DELAY", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -632,7 +681,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_DIFFUSION", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -660,7 +709,7 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"REVERB_DENSITY", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_REVERB;
 				*updt_params++ =
@@ -679,6 +728,8 @@ int msm_audio_effects_reverb_handler(struct audio_client *ac,
 	if (params_length && (rc == 0))
 		q6asm_send_audio_effects_params(ac, params,
 						params_length);
+	else
+		pr_debug("%s: did not send pp params\n", __func__);
 invalid_config:
 	kfree(params);
 	return rc;
@@ -738,7 +789,7 @@ int msm_audio_effects_bass_boost_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"BASS_BOOST_ENABLE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_BASS_BOOST;
 				*updt_params++ =
@@ -766,7 +817,7 @@ int msm_audio_effects_bass_boost_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"BASS_BOOST_MODE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_BASS_BOOST;
 				*updt_params++ =
@@ -794,7 +845,7 @@ int msm_audio_effects_bass_boost_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"BASS_BOOST_STRENGTH", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_BASS_BOOST;
 				*updt_params++ =
@@ -813,114 +864,8 @@ int msm_audio_effects_bass_boost_handler(struct audio_client *ac,
 	if (params_length && (rc == 0))
 		q6asm_send_audio_effects_params(ac, params,
 						params_length);
-invalid_config:
-	kfree(params);
-	return rc;
-}
-
-int msm_audio_effects_pbe_handler(struct audio_client *ac,
-					struct pbe_params *pbe,
-					long *values)
-{
-	long *param_max_offset = values + MAX_PP_PARAMS_SZ - 1;
-	char *params = NULL;
-	int rc = 0;
-	int devices = GET_NEXT(values, param_max_offset, rc);
-	int num_commands = GET_NEXT(values, param_max_offset, rc);
-	int *updt_params, i, j, prev_enable_flag;
-	uint32_t params_length = (MAX_INBAND_PARAM_SZ);
-
-	pr_debug("%s\n", __func__);
-	if (!ac || (devices == -EINVAL) || (num_commands == -EINVAL)) {
-		pr_err("%s: cannot set audio effects\n", __func__);
-		return -EINVAL;
-	}
-	params = kzalloc(params_length, GFP_KERNEL);
-	if (!params) {
-		pr_err("%s, params memory alloc failed\n", __func__);
-		return -ENOMEM;
-	}
-	pr_debug("%s: device: %d\n", __func__, devices);
-	updt_params = (int *)params;
-	params_length = 0;
-	for (i = 0; i < num_commands; i++) {
-		uint32_t command_id =
-			GET_NEXT(values, param_max_offset, rc);
-		uint32_t command_config_state =
-			GET_NEXT(values, param_max_offset, rc);
-		uint32_t index_offset =
-			GET_NEXT(values, param_max_offset, rc);
-		uint32_t length =
-			GET_NEXT(values, param_max_offset, rc);
-		switch (command_id) {
-		case PBE_ENABLE:
-			pr_debug("%s: PBE_ENABLE\n", __func__);
-			if (length != 1 || index_offset != 0) {
-				pr_err("no valid params\n");
-				rc = -EINVAL;
-				goto invalid_config;
-			}
-			prev_enable_flag = pbe->enable_flag;
-			pbe->enable_flag =
-				GET_NEXT(values, param_max_offset, rc);
-			if (prev_enable_flag != pbe->enable_flag) {
-				params_length += COMMAND_PAYLOAD_SZ +
-					PBE_ENABLE_PARAM_SZ;
-				CHECK_PARAM_LEN(params_length,
-						MAX_INBAND_PARAM_SZ,
-						"PBE_ENABLE", rc);
-				if (rc != 0)
-					goto invalid_config;
-				*updt_params++ =
-					AUDPROC_MODULE_ID_PBE;
-				*updt_params++ =
-					AUDPROC_PARAM_ID_PBE_ENABLE;
-				*updt_params++ =
-					PBE_ENABLE_PARAM_SZ;
-				*updt_params++ =
-					pbe->enable_flag;
-			}
-			break;
-		case PBE_CONFIG:
-			pr_debug("%s: PBE_PARAM length %u\n", __func__, length);
-			if (length > sizeof(struct pbe_config_t) ||
-				length < PBE_CONFIG_PARAM_LEN ||
-				index_offset != 0) {
-				pr_err("no valid params, len %d\n", length);
-				rc = -EINVAL;
-				goto invalid_config;
-			}
-			if (command_config_state == CONFIG_SET) {
-				params_length += COMMAND_PAYLOAD_SZ + length;
-				CHECK_PARAM_LEN(params_length,
-						MAX_INBAND_PARAM_SZ,
-						"PBE_PARAM", rc);
-				if (rc != 0)
-					goto invalid_config;
-				*updt_params++ =
-					AUDPROC_MODULE_ID_PBE;
-				*updt_params++ =
-					AUDPROC_PARAM_ID_PBE_PARAM_CONFIG;
-				*updt_params++ =
-					length;
-				for (j = 0; j < length; ) {
-					j += sizeof(*updt_params);
-					*updt_params++ =
-						GET_NEXT(
-						values,
-						param_max_offset,
-						rc);
-				}
-			}
-			break;
-		default:
-			pr_err("%s: Invalid command to set config\n", __func__);
-			break;
-		}
-	}
-	if (params_length && (rc == 0))
-		q6asm_send_audio_effects_params(ac, params,
-						params_length);
+	else
+		pr_debug("%s: did not send pp params\n", __func__);
 invalid_config:
 	kfree(params);
 	return rc;
@@ -981,7 +926,7 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"EQ_ENABLE", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_POPLESS_EQUALIZER;
 				*updt_params++ =
@@ -1049,7 +994,7 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"EQ_CONFIG", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_POPLESS_EQUALIZER;
 				*updt_params++ =
@@ -1100,7 +1045,7 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"EQ_BAND_INDEX", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_POPLESS_EQUALIZER;
 				*updt_params++ =
@@ -1132,7 +1077,7 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 						MAX_INBAND_PARAM_SZ,
 						"EQ_SINGLE_BAND_FREQ", rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				*updt_params++ =
 					AUDPROC_MODULE_ID_POPLESS_EQUALIZER;
 				*updt_params++ =
@@ -1151,6 +1096,8 @@ int msm_audio_effects_popless_eq_handler(struct audio_client *ac,
 	if (params_length && (rc == 0))
 		q6asm_send_audio_effects_params(ac, params,
 						params_length);
+	else
+		pr_debug("%s: did not send pp params\n", __func__);
 invalid_config:
 	kfree(params);
 	return rc;
@@ -1220,7 +1167,7 @@ static int __msm_audio_effects_volume_handler(struct audio_client *ac,
 						"VOLUME/VOLUME2_GAIN_2CH",
 						rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				if (instance == SOFT_VOLUME_INSTANCE_2)
 					*updt_params++ =
 						ASM_MODULE_ID_VOL_CTRL2;
@@ -1269,7 +1216,7 @@ static int __msm_audio_effects_volume_handler(struct audio_client *ac,
 						"VOLUME/VOLUME2_GAIN_MASTER",
 						rc);
 				if (rc != 0)
-					goto invalid_config;
+					break;
 				if (instance == SOFT_VOLUME_INSTANCE_2)
 					*updt_params++ =
 						ASM_MODULE_ID_VOL_CTRL2;
