@@ -2,7 +2,7 @@
 # MSM8916 KK kernel build script v0.5
 
 SELINUX_DEFCONFIG=selinux_defconfig
-SELINUX_LOG_DEFCONFIG=selinux_log_defconfig
+#SELINUX_LOG_DEFCONFIG=selinux_log_defconfig
 
 BUILD_COMMAND=$1
 if [ "$BUILD_COMMAND" == "a3u_eur" ]; then
@@ -153,8 +153,8 @@ BUILD_KERNEL_OUT_DIR=$BUILD_ROOT_DIR/android/out/target/product/$PRODUCT_NAME/ob
 PRODUCT_OUT=$BUILD_ROOT_DIR/android/out/target/product/$PRODUCT_NAME
 
 
-SECURE_SCRIPT=$BUILD_ROOT_DIR/buildscript/tools/signclient.jar
-BUILD_CROSS_COMPILE=$BUILD_ROOT_DIR/android/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8/bin/arm-eabi-
+#SECURE_SCRIPT=$BUILD_ROOT_DIR/buildscript/tools/signclient.jar
+#BUILD_CROSS_COMPILE=$BUILD_ROOT_DIR/android/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8/bin/arm-eabi-
 BUILD_JOB_NUMBER=`grep processor /proc/cpuinfo|wc -l`
 
 # Default Python version is 2.7
@@ -163,8 +163,8 @@ ln -sf /usr/bin/python2.7 ./bin/python
 export PATH=$(pwd)/bin:$PATH
 
 KERNEL_DEFCONFIG=msm8916_sec_defconfig
-DEBUG_DEFCONFIG=msm8916_sec_eng_defconfig
-DMVERITY_DEFCONFIG=dmverity_defconfig
+#DEBUG_DEFCONFIG=msm8916_sec_eng_defconfig
+#DMVERITY_DEFCONFIG=dmverity_defconfig
 
 while getopts "w:t:" flag; do
 	case $flag in
@@ -220,16 +220,16 @@ case $1 in
 		echo "Not support... remove kernel out directory by yourself"
 		exit 1
 		;;
-		
+
 		*)
-		
+
 		BOARD_KERNEL_BASE=0x80000000
 		BOARD_KERNEL_PAGESIZE=2048
 		BOARD_KERNEL_TAGS_OFFSET=0x01E00000
 		BOARD_RAMDISK_OFFSET=0x02000000
 		#BOARD_KERNEL_CMDLINE="console=ttyHSL0,115200,n8 androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x37 ehci-hcd.park=3"
 		BOARD_KERNEL_CMDLINE="console=ttyHSL0,115200,n8 androidboot.console=ttyHSL0 androidboot.hardware=qcom user_debug=31 msm_rtb.filter=0x3F ehci-hcd.park=3 androidboot.bootdevice=7824900.sdhci"
-#		BOARD_KERNEL_CMDLINE="console=ttyHSL0,115200,n8 androidboot.hardware=qcom androidboot.bootdevice=soc.0/7824900.sdhci user_debug=31 msm_rtb.filter=0x3F ehci-hcd.park=3 video=vfb:640x400,bpp=32,memsize=3072000 earlyprintk"
+		#BOARD_KERNEL_CMDLINE="console=ttyHSL0,115200,n8 androidboot.hardware=qcom androidboot.bootdevice=soc.0/7824900.sdhci user_debug=31 msm_rtb.filter=0x3F ehci-hcd.park=3 video=vfb:640x400,bpp=32,memsize=3072000 earlyprintk"
 		mkdir -p $BUILD_KERNEL_OUT_DIR
 		;;
 
@@ -259,7 +259,7 @@ FUNC_BUILD_DTIMAGE_TARGET()
 	echo "================================="
 	echo ""
 	echo "DT image target : $INSTALLED_DTIMAGE_TARGET"
-	
+
 	if ! [ -e $DTBTOOL ] ; then
 		if ! [ -d $BUILD_ROOT_DIR/android/out/host/linux-x86/bin ] ; then
 			mkdir -p $BUILD_ROOT_DIR/android/out/host/linux-x86/bin
@@ -302,17 +302,15 @@ FUNC_BUILD_KERNEL()
 	FUNC_CLEAN_DTB
 
 	make -C $BUILD_KERNEL_DIR O=$BUILD_KERNEL_OUT_DIR -j$BUILD_JOB_NUMBER ARCH=arm \
-			CROSS_COMPILE=$BUILD_CROSS_COMPILE \
 			$KERNEL_DEFCONFIG VARIANT_DEFCONFIG=$VARIANT_DEFCONFIG \
 			DEBUG_DEFCONFIG=$DEBUG_DEFCONFIG \
 			SELINUX_DEFCONFIG=$SELINUX_DEFCONFIG \
 			SELINUX_LOG_DEFCONFIG=$SELINUX_LOG_DEFCONFIG || exit -1
 
-	make -C $BUILD_KERNEL_DIR O=$BUILD_KERNEL_OUT_DIR -j$BUILD_JOB_NUMBER ARCH=arm \
-			CROSS_COMPILE=$BUILD_CROSS_COMPILE || exit -1
+	make -C $BUILD_KERNEL_DIR O=$BUILD_KERNEL_OUT_DIR -j$BUILD_JOB_NUMBER ARCH=arm || exit -1
 
 	FUNC_BUILD_DTIMAGE_TARGET
-	
+
 	echo ""
 	echo "================================="
 	echo "END   : FUNC_BUILD_KERNEL"
@@ -327,7 +325,7 @@ FUNC_MKBOOTIMG()
 	echo "START : FUNC_MKBOOTIMG"
 	echo "==================================="
 	echo ""
-	MKBOOTIMGTOOL=$BUILD_ROOT_DIR/android/kernel/tools/mkbootimg
+	MKBOOTIMGTOOL=mkbootimg
 
 	if ! [ -e $MKBOOTIMGTOOL ] ; then
 		if ! [ -d $BUILD_ROOT_DIR/android/out/host/linux-x86/bin ] ; then
@@ -346,7 +344,7 @@ FUNC_MKBOOTIMG()
 			--ramdisk_offset $BOARD_RAMDISK_OFFSET \
 			--tags_offset $BOARD_KERNEL_TAGS_OFFSET \
 			--dt $INSTALLED_DTIMAGE_TARGET"
-			
+
 	$MKBOOTIMGTOOL --kernel $KERNEL_ZIMG \
 			--ramdisk $PRODUCT_OUT/ramdisk.img \
 			--output $PRODUCT_OUT/boot.img \
